@@ -3,7 +3,8 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
-RUN pip install --no-cache-dir boardlib
+# BoardLib imports Pillow but doesn't install it itself
+RUN pip install --no-cache-dir boardlib pillow
 
 COPY config.py load_climbs.py export_search.py search.py ./
 COPY search/ search/
