@@ -75,7 +75,9 @@ def export_if_needed():
 def needs_export():
     if not OUT.exists():
         return True
-    newest_source = max(DB_PATH.stat().st_mtime, Path(CLIMBS_PATH).stat().st_mtime)
+    # rebuild when the data changes, or when the export itself has been updated
+    newest_source = max(DB_PATH.stat().st_mtime, Path(CLIMBS_PATH).stat().st_mtime,
+                        Path("export_search.py").stat().st_mtime)
     return OUT.stat().st_mtime < newest_source
 
 

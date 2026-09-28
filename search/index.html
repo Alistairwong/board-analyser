@@ -72,6 +72,7 @@ button, input, select { font: inherit; color: inherit; }
 .gen h2 { font: 600 20px/1.2 var(--cond); margin: 0 0 10px; }
 .gen-row { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 10px; }
 .gen .field select { background: var(--raise); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--text); }
+.genmore summary { cursor: pointer; font-weight: 600; margin-bottom: 4px; }
 .saved-list { list-style: none; margin: 12px 0 0; padding: 0; }
 .saved-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }
 .saved-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -215,7 +216,45 @@ ol.results li + li { border-top: 1px solid var(--line); }
           </select>
         </label>
       </div>
-      <button class="btn primary" id="genbtn">Generate</button>
+      <details class="genmore">
+        <summary>More options</summary>
+        <div class="gen-row" style="margin-top:10px">
+          <label class="field">Holds <select id="genset"><option value="any">Any</option></select></label>
+          <label class="field">Hold size
+            <select id="gensize">
+              <option value="any">Any</option>
+              <option value="big">Bigger, friendlier holds</option>
+              <option value="small">Smaller, harder holds</option>
+            </select>
+          </label>
+          <label class="field">Moves
+            <select id="genmoves">
+              <option value="any">Any</option>
+              <option value="big">Big moves</option>
+              <option value="small">Small, technical moves</option>
+              <option value="sideways">Lots of sideways movement</option>
+              <option value="straight">Straight up</option>
+            </select>
+          </label>
+          <label class="field">Feet
+            <select id="genfeet">
+              <option value="1">Normal</option>
+              <option value="0.5">Fewer feet</option>
+              <option value="1.5">More feet</option>
+            </select>
+          </label>
+          <label class="field">Start
+            <select id="genstart">
+              <option value="any">Any</option>
+              <option value="low">Low start</option>
+              <option value="high">Higher start</option>
+            </select>
+          </label>
+        </div>
+        <label class="checks" style="margin-bottom:6px"><input type="checkbox" id="genmarks" checked> Use the holds marked on the board</label>
+        <p class="note">To require or avoid specific holds, choose Must use, Start, Hand, Finish, Foot or Avoid above the board and tap holds. Hold size is estimated from how hard the climbs using each hold are.</p>
+      </details>
+      <button class="btn primary" id="genbtn" style="margin-top:10px">Generate</button>
       <p class="note" id="gennote">New climbs are pieced together from how real climbs at that grade move between holds, then graded against the most similar real climbs.</p>
       <div id="saved"></div>
     </section>
@@ -356,6 +395,7 @@ async function init() {
   try { boardImg = await getJson("board.json"); } catch (e) { boardImg = null; }
 
   holes = data.holes;
+  window.boardSets = data.sets || [];
   const at = new Map(holes.map((h, i) => [h[0] + "," + h[1], i]));
   mirrorOf = holes.map(h => at.get((-h[0]) + "," + h[1]) ?? -1);
 
@@ -738,7 +778,11 @@ const gen = {
       for (const x of hands) for (const f of feet) bump(FT, x.h, f.h, 0);
       starts.push(st0); moves.push(path.length); feetN.push(feet.length);
     }
-    const m = { T, FT, starts, moves, feetN, size: pool.length };
+    const lengths = [];
+    for (const [a, row] of T) for (const [b] of row) lengths.push(Math.hypot(holes[a][0] - holes[b][0], holes[a][1] - holes[b][1]));
+    lengths.sort((a, b) => a - b);
+    const q = f => lengths.length ? lengths[Math.floor(f * (lengths.length - 1))] : 16;
+    const m = { T, FT, starts, moves, feetN, size: pool.length, medMove: q(0.5), reach: q(0.9) };
     this.models.set(band.v, m);
     return m;
   },
@@ -751,21 +795,54 @@ const gen = {
     return weighted.length ? weighted[weighted.length - 1][0] : null;
   },
 
-  sampleOne(m) {
+  // opts: { allowed(h), bias(h), moveBias(from, to), req: Map(hole -> role or -1), feet: 0.5|1|1.5, start: "any"|"low"|"high" }
+  sampleOne(m, opts) {
     if (!m.starts.length) return null;
     const y = h => holes[h][1];
-    const starts = m.starts[Math.floor(Math.random() * m.starts.length)];
+    const dist = (a, b) => Math.hypot(holes[a][0] - holes[b][0], holes[a][1] - holes[b][1]);
+    const req = opts.req;
+    const reqStarts = [...req].filter(([, r]) => r === 0).map(([h]) => h);
+    const reqFinish = [...req].filter(([, r]) => r === 2).map(([h]) => h);
+    const reqHands = [...req].filter(([, r]) => r === 1 || r === -1).map(([h]) => h);
+    const reqFeet = [...req].filter(([, r]) => r === 3).map(([h]) => h);
+
+    // start holds: a real start set that suits the options, or the required ones
+    const top = st => st.reduce((a, b) => y(b) > y(a) ? b : a);
+    const startOk = st => st.every(opts.allowed) && reqStarts.every(h => st.includes(h)) &&
+      (opts.start === "low" ? y(top(st)) <= 28 : opts.start === "high" ? y(top(st)) >= 40 : true);
+    const pool = m.starts.filter(startOk);
+    const starts = pool.length ? pool[Math.floor(Math.random() * pool.length)] : reqStarts.length ? reqStarts : null;
+    if (!starts) return null;
+
     const used = new Set(starts);
-    let cur = starts.reduce((a, b) => y(b) > y(a) ? b : a);
+    let cur = top(starts);
     const path = [];
     for (let step = 0; step < 16; step++) {
-      const row = m.T.get(cur);
-      if (!row) return null;
-      const opts = [...row].filter(([j]) => !used.has(j) && y(j) >= y(cur) - 4);
-      if (!opts.length) return null;
-      const next = this.pick(opts.map(([j, [mv, fin]]) => [j, mv + fin]));
-      const [mv, fin] = row.get(next);
-      const finish = Math.random() < fin / (mv + fin);
+      const row = m.T.get(cur) || new Map();
+      const cands = new Map();
+      for (const [j, [mv, fin]] of row) {
+        if (!used.has(j) && opts.allowed(j) && y(j) >= y(cur) - 4) cands.set(j, [mv, fin]);
+      }
+      // required hand or finish holds within reach can be moved to even if no real climb does
+      for (const j of [...reqHands, ...reqFinish]) {
+        if (!used.has(j) && !cands.has(j) && y(j) >= y(cur) - 4 && dist(cur, j) <= m.reach) {
+          cands.set(j, reqFinish.includes(j) ? [0.5, 1] : [1, 0]);
+        }
+      }
+      if (!cands.size) return null;
+      const handsLeft = reqHands.some(h => !used.has(h));
+      const weighted = [...cands].map(([j, [mv, fin]]) => {
+        let w = (mv + fin) * opts.bias(j) * opts.moveBias(cur, j);
+        if (req.has(j) && req.get(j) !== 3 && req.get(j) !== 0) w *= 25;   // steer towards required holds
+        if (reqFinish.length && fin > 0 && !reqFinish.includes(j)) w *= 0.2;
+        return [j, w];
+      });
+      const next = this.pick(weighted);
+      const [mv, fin] = cands.get(next);
+      let finish;
+      if (reqFinish.length) finish = reqFinish.includes(next) && !handsLeft;
+      else finish = !handsLeft && Math.random() < fin / (mv + fin);
+      if (reqFinish.includes(next) && handsLeft) finish = false;
       used.add(next);
       path.push({ h: next, r: finish ? 2 : 1 });
       cur = next;
@@ -773,14 +850,18 @@ const gen = {
     }
     if (!path.length || path[path.length - 1].r !== 2) return null;
 
-    const nFeet = m.feetN[Math.floor(Math.random() * m.feetN.length)];
+    let nFeet = m.feetN[Math.floor(Math.random() * m.feetN.length)];
+    nFeet = Math.max(reqFeet.length, Math.round(nFeet * opts.feet));
+    const feet = reqFeet.filter(h => !used.has(h));
+    feet.forEach(h => used.add(h));
     const score = new Map();
     for (const h of [...starts, ...path.map(x => x.h)]) {
       const row = m.FT.get(h);
-      if (row) for (const [f, [w]] of row) if (!used.has(f)) score.set(f, (score.get(f) || 0) + w);
+      if (row) for (const [f, [w]] of row) {
+        if (!used.has(f) && opts.allowed(f)) score.set(f, (score.get(f) || 0) + w * opts.bias(f, true));
+      }
     }
-    const feet = [];
-    for (let k = 0; k < nFeet && score.size; k++) {
+    while (feet.length < nFeet && score.size) {
       const f = this.pick([...score]);
       feet.push(f);
       score.delete(f);
@@ -790,6 +871,16 @@ const gen = {
       roles: [...starts.map(() => 0), ...path.map(x => x.r), ...feet.map(() => 3)],
       moves: path.length,
     };
+  },
+
+  // Does a finished candidate meet every hard rule?
+  satisfies(cand, opts) {
+    const role = new Map(cand.holds.map((h, k) => [h, cand.roles[k]]));
+    for (const [h, r] of opts.req) {
+      if (!role.has(h)) return false;
+      if (r >= 0 && role.get(h) !== r) return false;
+    }
+    return cand.holds.every(opts.allowed) && new Set(cand.holds).size === cand.holds.length;
   },
 
   estimate(holds) {
@@ -814,17 +905,62 @@ const gen = {
     return { d, nearest: top[0] };
   },
 
-  run(v, length) {
+  // Per-hold "friendliness": how much easier than average the climbs using it as a
+  // hand hold are. Jugs score high, crimps and slopers low. Needs no hold labels.
+  friendliness() {
+    if (this.friendly) return this.friendly;
+    const sum = new Map(), n = new Map();
+    let all = 0, count = 0;
+    for (const c of this.graded) c.holds.forEach((h, k) => {
+      if (c.roles[k] === 3) return;
+      sum.set(h, (sum.get(h) || 0) + c.diff); n.set(h, (n.get(h) || 0) + 1);
+      all += c.diff; count++;
+    });
+    const mean = all / Math.max(1, count);
+    const raw = holes.map((_, h) => n.get(h) >= 5 ? mean - sum.get(h) / n.get(h) : 0);
+    const sd = Math.sqrt(raw.reduce((t, v) => t + v * v, 0) / Math.max(1, raw.length)) || 1;
+    this.friendly = raw.map(v => v / sd);
+    return this.friendly;
+  },
+
+  options(o) {
+    const setOf = h => holes[h][3];
+    const friendly = this.friendliness();
+    const [mode, setIdx] = (o.material || "any").split(":");
+    const want = setIdx == null ? null : +setIdx;
+    const avoid = o.avoid || new Set();
+    const allowed = h => !avoid.has(h) && (mode !== "only" || setOf(h) === want);
+    const bias = (h, isFoot) => {
+      let w = 1;
+      if (mode === "mostly" && setOf(h) === want) w *= 4;
+      if (!isFoot && o.size === "big") w *= Math.exp(0.9 * friendly[h]);
+      if (!isFoot && o.size === "small") w *= Math.exp(-0.9 * friendly[h]);
+      return w;
+    };
+    const moveBias = (a, b) => {
+      const dx = Math.abs(holes[b][0] - holes[a][0]), dy = Math.max(2, holes[b][1] - holes[a][1]);
+      const d = Math.hypot(dx, dy), med = o.medMove || 16;
+      if (o.moves === "big") return (d / med) ** 2;
+      if (o.moves === "small") return (med / d) ** 2;
+      if (o.moves === "sideways") return (1 + dx / dy) ** 2;
+      if (o.moves === "straight") return 1 / (1 + dx / 8) ** 2;
+      return 1;
+    };
+    return { allowed, bias, moveBias, req: o.req || new Map(), feet: o.feet || 1, start: o.start || "any" };
+  },
+
+  run(v, length, o = {}) {
     this.prepare();
     const band = this.bands.find(b => b.v === v);
     if (!band) return null;
     const m = this.model(band);
+    const opts = this.options({ ...o, medMove: m.medMove });
     const fits = n => length === "short" ? n <= 4 : length === "medium" ? n >= 5 && n <= 7 : length === "long" ? n >= 8 : true;
     const centre = (band.lo + band.hi) / 2;
     let best = null, valid = 0;
-    for (let tries = 0; tries < 400 && valid < 30; tries++) {
-      const cand = this.sampleOne(m);
-      if (!cand || !fits(cand.moves) || new Set(cand.holds).size !== cand.holds.length) continue;
+    for (let tries = 0; tries < 2500 && valid < 30; tries++) {
+      const cand = this.sampleOne(m, opts);
+      if (!cand || !fits(cand.moves) || !this.satisfies(cand, opts)) continue;
       const est = this.estimate(cand.holds);
       if (!est) continue;
       valid++;
@@ -915,9 +1051,20 @@ function renderGeneratedSide(side) {
 
 function generate() {
   const note = $("gennote");
-  const c = gen.run($("gengrade").value, $("genlen").value);
+  const useMarks = $("genmarks").checked;
+  const c = gen.run($("gengrade").value, $("genlen").value, {
+    material: $("genset").value,
+    size: $("gensize").value,
+    moves: $("genmoves").value,
+    feet: +$("genfeet").value,
+    start: $("genstart").value,
+    req: useMarks ? st.req : new Map(),
+    avoid: useMarks ? st.avoid : new Set(),
+  });
   if (!c) {
-    note.textContent = "Couldn't build a climb with those settings. Try another length or grade.";
+    note.textContent = useMarks && (st.req.size || st.avoid.size)
+      ? "Couldn't build a climb with those settings. Marked holds may be too far apart, or in roles that don't fit this grade. Try fewer marked holds, a different grade, or relaxing other options."
+      : "Couldn't build a climb with those settings. Try relaxing some options, or a different grade or length.";
     return;
   }
   note.textContent = "";
@@ -932,6 +1079,13 @@ function buildGenerator() {
   const mid = gen.bands[Math.floor(gen.bands.length / 3)];
   if (mid) $("gengrade").value = mid.v;
   $("genbtn").onclick = generate;
+  const sets = window.boardSets || [];
+  if (sets.length > 1) {
+    $("genset").innerHTML = `<option value="any">Any</option>` + sets.map((n, i) =>
+      `<option value="only:${i}">Only ${esc(n)}</option><option value="mostly:${i}">Mostly ${esc(n)}</option>`).join("");
+  } else {
+    $("genset").closest("label").hidden = true;
+  }
   $("saved").addEventListener("click", e => {
     const b = e.target.closest("button");
     if (!b) return;

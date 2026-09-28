@@ -48,6 +48,18 @@ def led_positions(con):
         return {}
 
 
+def hole_sets(con):
+    """hole id -> index of its hold set (e.g. wood or plastic), plus the set names."""
+    try:
+        rows = con.execute(
+            "SELECT p.hole_id, s.name FROM placements p JOIN sets s ON s.id = p.set_id "
+            "WHERE p.layout_id = ?", (LAYOUT_ID,)).fetchall()
+    except sqlite3.Error:
+        return {}, []
+    names = sorted({n for _, n in rows if n})
+    return {h: names.index(n) for h, n in rows if n}, names
+
+
 def role_colours(con):
     """Role name -> the colour the Tension app lights it in."""
     cols = {r[1] for r in con.execute("PRAGMA table_info(placement_roles)")}
@@ -61,6 +73,7 @@ def export():
     holes = load_holes(con)
     index = {(x, y): i for i, (_, _, x, y) in enumerate(holes)}
     leds = led_positions(con)
+    sets, set_names = hole_sets(con)
 
     data = json.loads(Path(CLIMBS_PATH).read_text())
     role_names = {int(k): v["name"] for k, v in data["roles"].items()}
@@ -103,7 +116,8 @@ def export():
     OUT.write_text(json.dumps({
         "board": board_name(con),
         "angle": ANGLE,
-        "holes": [[x, y, leds.get(hid)] for hid, _, x, y in holes],
+        "holes": [[x, y, leds.get(hid), sets.get(hid)] for hid, _, x, y in holes],
+        "sets": set_names,
         "role_colours": role_colours(con),
         "grades": {str(k): v for k, v in grades.items()},
         "climbs": climbs,
