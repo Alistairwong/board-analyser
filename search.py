@@ -33,16 +33,29 @@ PAGE = Path("search/index.html")
 STATIC = Path("search")
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".json": "application/json",
                 ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
-                ".svg": "image/svg+xml"}
+                ".svg": "image/svg+xml", ".js": "text/javascript; charset=utf-8",
+                ".webmanifest": "application/manifest+json"}
 _cache = {}
 _export_lock = threading.Lock()
 
 
 def sync_database():
-    """Download or update tension.db with BoardLib, then rebuild the climb list."""
+    """Download or update tension.db with BoardLib, then rebuild the climb list.
+
+    New climbs only come through when logged in, using TENSION_USERNAME and
+    TENSION_PASSWORD from the environment (the server's .env file).
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    print("Syncing the Tension climb database (can take a few minutes the first time)...")
-    subprocess.run(["boardlib", "database", "tension", str(DB_PATH)], check=True)
+    cmd = ["boardlib", "database", "tension", str(DB_PATH)]
+    user = os.environ.get("TENSION_USERNAME", "").strip()
+    password = os.environ.get("TENSION_PASSWORD", "")
+    if user:
+        cmd += ["--username", user]
+        print(f"Syncing the Tension climb database as {user}...")
+    else:
+        print("No TENSION_USERNAME set, so only the climbs bundled with the app are available.")
+    # BoardLib asks for the password at a prompt; answer it from the environment
+    subprocess.run(cmd, check=True, text=True, input=(password + "\n") if user else None)
     subprocess.run([sys.executable, "load_climbs.py"], check=True)
 
 

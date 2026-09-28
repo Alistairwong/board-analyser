@@ -5,3 +5,4 @@ data/
 *.mov
 *.mp4
 *.avi
+.env
