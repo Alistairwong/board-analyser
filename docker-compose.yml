@@ -1,0 +1,9 @@
+services:
+  climb-search:
+    build: .
+    container_name: climb-search
+    restart: unless-stopped
+    ports:
+      - "8010:8000"          # http://nas-server:8010 on your network
+    volumes:
+      - ./data:/app/data     # tension.db and exported climbs live here, outside the container

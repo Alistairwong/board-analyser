@@ -1,0 +1,23 @@
+{
+ "image": "board.webp",
+ "width": 1100,
+ "height": 1626,
+ "homography": [
+  [
+   11.71779009,
+   0.15137598,
+   539.39917525
+  ],
+  [
+   -0.09301225,
+   -10.94216309,
+   1600.8869305
+  ],
+  [
+   -1.674e-05,
+   1.635e-05,
+   1.0
+  ]
+ ],
+ "note": "Maps board coordinates (inches) to pixels in board.webp. Fitted from the 12x8 TB2 Mirror layout image."
+}

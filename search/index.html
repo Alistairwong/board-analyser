@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Climb search</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #1b1f22;
+  --panel: #242a2e;
+  --raise: #2e353a;
+  --line: #3a4247;
+  --text: #e8ebeb;
+  --muted: #9aa4a8;
+  --board: #d3d6d5;
+  --tnut: #5e6568;
+  --focus: #8fb8ff;
+  --ok: #7fd1a0;
+  --cond: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--body); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.app {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 28px;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+}
+
+/* ---------- board column ---------- */
+.board-col {
+  position: sticky; top: 16px; align-self: start;
+  display: flex; flex-direction: column; gap: 12px;
+  width: min(460px, calc((100vh - 150px) * 0.68));
+  min-width: 270px;
+  max-height: calc(100vh - 32px); overflow-y: auto;
+}
+#board { display: block; width: 100%; height: auto; border-radius: 6px; user-select: none; background: #6f7477; }
+#board .hit { fill: transparent; cursor: pointer; }
+#board .hit:hover { fill: rgba(255, 255, 255, 0.18); }
+
+.modes { display: flex; flex-wrap: wrap; gap: 4px; }
+.modes button {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: 4px 10px; cursor: pointer; font-size: 14px;
+}
+.modes button[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.modes-label { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+
+.panel { background: var(--panel); border-radius: 6px; padding: 14px 16px; }
+.hint { color: var(--muted); margin: 0; }
+.holdsum { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+
+.detail h2 { font: 600 24px/1.15 var(--cond); margin: 0 0 4px; overflow-wrap: anywhere; }
+.detail .grade-line { font: 600 18px/1.2 var(--cond); }
+.detail dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 10px 0 12px; }
+.detail dt { color: var(--muted); }
+.detail dd { margin: 0; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+
+.btn {
+  background: var(--raise); border: 1px solid var(--line); border-radius: 4px;
+  padding: 6px 12px; cursor: pointer;
+}
+.btn:hover { background: var(--line); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 600; }
+.btn.quiet { background: none; border-color: transparent; color: var(--muted); padding: 6px 4px; }
+.btn.quiet:hover { color: var(--text); }
+
+.legend { display: grid; grid-template-columns: repeat(2, auto); gap: 6px 16px; font-size: 14px; justify-content: start; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend svg { width: 20px; height: 20px; }
+details.colours summary { cursor: pointer; font-weight: 600; }
+.colour-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.colour-row input[type="color"] { width: 36px; height: 26px; border: 1px solid var(--line); background: none; padding: 0; }
+.colour-row select { background: var(--raise); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+
+/* ---------- results column ---------- */
+header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+header h1 { font: 700 30px/1.1 var(--cond); margin: 0; }
+header p { margin: 2px 0 16px; color: var(--muted); }
+.bt-status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+.bt-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.bt-status.on .dot { background: var(--ok); }
+.bt-status.on { color: var(--text); }
+
+.filters { display: grid; gap: 12px; margin-bottom: 18px; }
+.search { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; font-size: 16px; }
+.search::placeholder { color: var(--muted); }
+.row-controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: end; }
+.field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+.field select { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: 14px; color: var(--text); }
+.range { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; }
+.checks label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.checks input { width: 16px; height: 16px; }
+
+.status { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.count { font: 600 18px/1.2 var(--cond); }
+.similar-chip { display: inline-flex; align-items: center; gap: 8px; background: var(--raise); border-radius: 4px; padding: 3px 4px 3px 10px; font-size: 14px; }
+
+ol.results { list-style: none; margin: 0; padding: 0; }
+ol.results li + li { border-top: 1px solid var(--line); }
+.climb {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 14px; align-items: center; width: 100%;
+  background: none; border: 0; padding: 10px 8px; text-align: left; cursor: pointer; border-radius: 4px;
+}
+.climb:hover { background: var(--panel); }
+.climb[aria-pressed="true"] { background: var(--raise); }
+.climb .v { font: 700 26px/1 var(--cond); }
+.climb .font { display: block; font: 500 14px/1.2 var(--cond); color: var(--muted); margin-top: 2px; }
+.climb .ungraded { font: 500 15px/1.1 var(--cond); color: var(--muted); }
+.climb .name { font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
+.climb .sub { color: var(--muted); font-size: 13px; }
+.climb .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+.tag { font-size: 12px; border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; color: var(--muted); }
+.tag.sim { color: var(--text); border-color: var(--muted); }
+.climb .nums { text-align: right; font-size: 14px; white-space: nowrap; }
+.climb .asc { font-weight: 600; }
+.climb .stars { color: var(--muted); }
+
+.more { margin: 14px auto 0; display: block; }
+.empty { color: var(--muted); padding: 24px 8px; }
+
+@media (max-width: 820px) {
+  .app { grid-template-columns: 1fr; padding: 14px; gap: 16px; }
+  .board-col { position: static; width: 100%; min-width: 0; max-height: none; overflow: visible; }
+  #board { max-width: 360px; margin: 0 auto; }
+  .climb { grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; }
+  .climb .v { font-size: 22px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="board-col">
+    <svg id="board" role="img" aria-label="Board: tap holds to filter climbs">
+      <defs>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      <g id="base"></g>
+      <g id="leds"></g>
+      <g id="marks"></g>
+      <g id="hits"></g>
+    </svg>
+
+    <div>
+      <p class="modes-label">Tapping a hold sets it to:</p>
+      <div class="modes" id="modes" role="group" aria-label="What tapping a hold does"></div>
+    </div>
+
+    <section class="panel" id="side"></section>
+
+    <section class="panel">
+      <details class="colours" id="colours">
+        <summary>Hold colours</summary>
+        <div class="colour-row">
+          <label for="preset">Colour set</label>
+          <select id="preset">
+            <option value="app">Tension app colours</option>
+            <option value="cvd">Colour-blind friendly</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div id="pickers"></div>
+        <p class="note">Each role also has its own shape on screen. These colours are also used when lighting a climb on your board.</p>
+      </details>
+    </section>
+  </aside>
+
+  <main>
+    <header>
+      <div>
+        <h1>Climb search</h1>
+        <p id="boardline">Loading climbs…</p>
+      </div>
+      <div class="bt-status" id="btstatus"><span class="dot"></span><span id="bttext">Board not connected</span>
+        <button class="btn" id="btconnect">Connect board</button></div>
+    </header>
+
+    <div class="filters">
+      <input class="search" id="q" type="search" placeholder="Search by climb name or setter" autocomplete="off" aria-label="Search by climb name or setter">
+      <div class="row-controls">
+        <div class="field">Grade
+          <span class="range">
+            <select id="gmin" aria-label="Lowest grade"></select> to
+            <select id="gmax" aria-label="Highest grade"></select>
+          </span>
+        </div>
+        <label class="field">Ascents
+          <select id="minasc">
+            <option value="0">Any</option><option value="5">5+</option><option value="20">20+</option>
+            <option value="100">100+</option><option value="500">500+</option><option value="1000">1,000+</option>
+          </select>
+        </label>
+        <label class="field">Stars
+          <select id="minstars">
+            <option value="0">Any</option><option value="1.5">1.5+</option><option value="2">2+</option>
+            <option value="2.5">2.5+</option><option value="2.8">2.8+</option>
+          </select>
+        </label>
+        <label class="field">Sort by
+          <select id="sort">
+            <option value="ascents">Most ascents</option>
+            <option value="stars">Highest rated</option>
+            <option value="easy">Easiest first</option>
+            <option value="hard">Hardest first</option>
+            <option value="new">Newest first</option>
+            <option value="name">Name</option>
+          </select>
+        </label>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="bench"> Benchmarks only</label>
+        <label><input type="checkbox" id="mirror" checked> Include mirrored climbs</label>
+        <label><input type="checkbox" id="ungraded"> Include climbs with no ascents at this angle</label>
+      </div>
+    </div>
+
+    <div class="status">
+      <span class="count" id="count" aria-live="polite"></span>
+      <span id="simchip"></span>
+    </div>
+    <ol class="results" id="results"></ol>
+    <button class="btn more" id="more" hidden>Show 100 more</button>
+  </main>
+</div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const PAGE = 100;
+const ROLES = ["Start", "Hand", "Finish", "Foot"];              // role codes 0-3
+const ROLE_KEYS = ["start", "middle", "finish", "foot"];         // names in the database
+const MODES = [                                                  // what tapping a hold does
+  { key: "any", label: "Must use", code: -1, badge: "+" },
+  { key: "start", label: "Start", code: 0, badge: "S" },
+  { key: "hand", label: "Hand", code: 1, badge: "H" },
+  { key: "finish", label: "Finish", code: 2, badge: "F" },
+  { key: "foot", label: "Foot", code: 3, badge: "Ft" },
+  { key: "avoid", label: "Avoid", code: null, badge: "×" },
+];
+const PRESETS = {
+  app: ["#00dd00", "#0066ff", "#ff0000", "#ff00ff"],
+  // Red-green safe: separated by blue-yellow and lightness rather than red vs green
+  cvd: ["#ffffff", "#0050ff", "#ffd000", "#ff6a00"],
+};
+
+let holes = [], P = [], U = 1, mirrorOf = [], grades = [], climbs = [], results = [];
+const st = {
+  q: "", gMin: null, gMax: null, minAsc: 0, minStars: 0, sort: "ascents",
+  bench: false, mirror: true, ungraded: false,
+  req: new Map(),        // hole -> required role code (-1 = any role)
+  avoid: new Set(),
+  mode: "any",
+  similar: null,         // {c, set}
+  selected: null,        // {c, mirrored}
+  limit: PAGE,
+  colours: PRESETS.app.slice(),
+  preset: "app",
+};
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+const fmt = n => n.toLocaleString();
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+
+// ---------- data ----------
+
+async function getJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(url + " " + res.status);
+  return res.json();
+}
+
+async function init() {
+  let data, boardImg = null;
+  try { data = await getJson("climbs.json"); }
+  catch (e) {
+    $("boardline").textContent = "Couldn't load the climb data. Start this page with: python search.py";
+    return;
+  }
+  try { boardImg = await getJson("board.json"); } catch (e) { boardImg = null; }
+
+  holes = data.holes;
+  const at = new Map(holes.map((h, i) => [h[0] + "," + h[1], i]));
+  mirrorOf = holes.map(h => at.get((-h[0]) + "," + h[1]) ?? -1);
+
+  grades = Object.entries(data.grades)
+    .map(([d, n]) => { const [font, v] = n.split("/"); return { d: +d, font, v: v || font }; })
+    .sort((a, b) => a.d - b.d);
+  const gradeAt = new Map(grades.map(g => [g.d, g]));
+
+  climbs = data.climbs.map(c => {
+    const hs = [], rs = [];
+    for (let i = 0; i < c[8].length; i += 2) { hs.push(c[8][i]); rs.push(c[8][i + 1]); }
+    const d = c[4] == null ? null : Math.round(c[4]);
+    return {
+      uuid: c[0], name: c[1], setter: c[2], date: c[3], diff: c[4], d,
+      g: d == null ? null : gradeAt.get(d) || null,
+      bench: !!c[5], asc: c[6], stars: c[7],
+      holds: hs, roles: rs, set: new Set(hs), map: new Map(hs.map((h, k) => [h, rs[k]])),
+      mset: null, mmap: null,
+      text: (c[1] + " " + c[2]).toLowerCase(),
+    };
+  });
+
+  // the app's own colours, if the database has them
+  const rc = data.role_colours || {};
+  PRESETS.app = ROLE_KEYS.map((k, i) => rc[k] ? "#" + rc[k].replace("#", "").toLowerCase() : PRESETS.app[i]);
+  const saved = store.get("colours");
+  if (saved && PRESETS[saved.preset]) { st.preset = saved.preset; st.colours = PRESETS[saved.preset].slice(); }
+  else if (saved && saved.preset === "custom" && Array.isArray(saved.colours)) { st.preset = "custom"; st.colours = saved.colours; }
+  else st.colours = PRESETS.app.slice();
+
+  $("boardline").textContent = `${data.board} at ${data.angle}°, ${fmt(climbs.length)} climbs`;
+  buildBoard(boardImg);
+  buildModes();
+  buildGrades();
+  buildColours();
+  bind();
+  bt.setup();
+  update();
+}
+
+function mirrorSet(c) {
+  if (!c.mset) c.mset = new Set(c.holds.map(i => mirrorOf[i]));
+  return c.mset;
+}
+function mirrorMap(c) {
+  if (!c.mmap) c.mmap = new Map(c.holds.map((h, k) => [mirrorOf[h], c.roles[k]]));
+  return c.mmap;
+}
+
+// ---------- board drawing ----------
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function project(H, x, y) {
+  const w = H[2][0] * x + H[2][1] * y + H[2][2];
+  return [(H[0][0] * x + H[0][1] * y + H[0][2]) / w, (H[1][0] * x + H[1][1] * y + H[1][2]) / w];
+}
+
+function buildBoard(img) {
+  const svg = $("board"), base = $("base"), hits = $("hits");
+  if (img) {
+    // Photo-style layout image, with holes placed using its fitted transform
+    P = holes.map(h => project(img.homography, h[0], h[1]));
+    const a = project(img.homography, 0, 72), b = project(img.homography, 1, 72);
+    U = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    svg.setAttribute("viewBox", `0 0 ${img.width} ${img.height}`);
+    el("image", { href: img.image, x: 0, y: 0, width: img.width, height: img.height }, base);
+  } else {
+    // Plain board: grey panel with bolt holes
+    P = holes.map(h => [h[0], 144 - h[1]]);
+    U = 1;
+    svg.setAttribute("viewBox", "-46 -2 92 148");
+    el("rect", { x: -44, y: 0, width: 88, height: 144, rx: 1.2, fill: "var(--board)" }, base);
+    P.forEach(([x, y]) => el("circle", { cx: x, cy: y, r: 0.85, fill: "var(--tnut)" }, base));
+  }
+  P.forEach(([x, y], i) => {
+    const hit = el("circle", { cx: x, cy: y, r: 3.6 * U, class: "hit", "data-i": i }, hits);
+    el("title", {}, hit).textContent = `Hold at ${holes[i][0]}, ${holes[i][1]}`;
+  });
+  hits.addEventListener("click", e => {
+    const i = e.target.getAttribute && e.target.getAttribute("data-i");
+    if (i != null) tapHold(+i);
+  });
+}
+
+// Role shape, centred on (x, y). Shapes differ so roles never rely on colour alone.
+function roleShape(code, x, y, colour, parent, u = U) {
+  const halo = { fill: "none", stroke: "rgba(0,0,0,0.6)", "stroke-width": 1.5 * u };
+  const line = { fill: "none", stroke: colour, "stroke-width": 0.8 * u };
+  const draw = attrs => {
+    if (code === 0) { const s = 2.9 * u; return el("rect", { x: x - s, y: y - s, width: 2 * s, height: 2 * s, rx: 0.5 * u, ...attrs }, parent); }
+    if (code === 2) { const s = 3.8 * u; return el("polygon", { points: `${x},${y - s} ${x + s},${y} ${x},${y + s} ${x - s},${y}`, ...attrs }, parent); }
+    if (code === 3) return el("circle", { cx: x, cy: y, r: 2.6 * u, "stroke-dasharray": `${1.3 * u} ${0.9 * u}`, ...attrs }, parent);
+    return el("circle", { cx: x, cy: y, r: 3.0 * u, ...attrs }, parent);
+  };
+  draw(halo);
+  const shape = draw(line);
+  shape.setAttribute("filter", "url(#glow)");
+}
+
+function drawLeds() {
+  const g = $("leds");
+  g.textContent = "";
+  if (!st.selected) return;
+  const { c, mirrored } = st.selected;
+  c.holds.forEach((h, k) => {
+    const i = mirrored ? mirrorOf[h] : h;
+    if (i < 0) return;
+    const role = c.roles[k];
+    roleShape(role, P[i][0], P[i][1], st.colours[role] || st.colours[1], g);
+  });
+}
+
+function badge(x, y, text, g) {
+  const r = 1.55 * U, bx = x + 2.4 * U, by = y - 2.4 * U;
+  el("circle", { cx: bx, cy: by, r, fill: "#ffffff", stroke: "#111", "stroke-width": 0.35 * U }, g);
+  const t = el("text", { x: bx, y: by + 0.55 * U, "text-anchor": "middle", "font-size": (text.length > 1 ? 1.35 : 1.8) * U,
+    "font-weight": 700, "font-family": "Barlow, system-ui, sans-serif", fill: "#111" }, g);
+  t.textContent = text;
+}
+
+function drawMarks() {
+  const g = $("marks");
+  g.textContent = "";
+  const ring = (i, dashed) => {
+    const [x, y] = P[i];
+    el("circle", { cx: x, cy: y, r: 3.3 * U, fill: "none", stroke: "#111", "stroke-width": 1.1 * U }, g);
+    el("circle", { cx: x, cy: y, r: 3.3 * U, fill: "none", stroke: "#fff", "stroke-width": 0.55 * U,
+      ...(dashed ? { "stroke-dasharray": `${0.9 * U} ${0.7 * U}` } : {}) }, g);
+  };
+  for (const [i, code] of st.req) {
+    ring(i, false);
+    badge(P[i][0], P[i][1], MODES.find(m => m.code === code).badge, g);
+  }
+  for (const i of st.avoid) {
+    ring(i, true);
+    badge(P[i][0], P[i][1], "×", g);
+  }
+}
+
+// ---------- hold filter ----------
+
+function tapHold(i) {
+  const mode = MODES.find(m => m.key === st.mode);
+  const had = mode.code === null ? st.avoid.has(i) : (st.req.has(i) && st.req.get(i) === mode.code);
+  st.req.delete(i);
+  st.avoid.delete(i);
+  if (!had) {
+    if (mode.code === null) st.avoid.add(i);
+    else st.req.set(i, mode.code);
+  }
+  st.limit = PAGE;
+  update();
+}
+
+function passesHolds(map) {
+  for (const [i, code] of st.req) {
+    if (!map.has(i)) return false;
+    if (code >= 0 && map.get(i) !== code) return false;
+  }
+  for (const i of st.avoid) if (map.has(i)) return false;
+  return true;
+}
+
+function jaccard(a, b) {
+  let n = 0;
+  for (const i of a) if (b.has(i)) n++;
+  return n / (a.size + b.size - n);
+}
+
+function run() {
+  const q = st.q.trim().toLowerCase();
+  const holdFilter = st.req.size > 0 || st.avoid.size > 0;
+  const out = [];
+  for (const c of climbs) {
+    if (q && !c.text.includes(q)) continue;
+    if (c.d == null) { if (!st.ungraded) continue; }
+    else if (c.d < st.gMin || c.d > st.gMax) continue;
+    if (c.asc < st.minAsc) continue;
+    if (st.minStars && (c.stars == null || c.stars < st.minStars)) continue;
+    if (st.bench && !c.bench) continue;
+
+    let mirrored = false;
+    if (holdFilter) {
+      if (passesHolds(c.map)) mirrored = false;
+      else if (st.mirror && passesHolds(mirrorMap(c))) mirrored = true;
+      else continue;
+    }
+
+    let sim = null;
+    if (st.similar) {
+      const T = st.similar.set;
+      if (holdFilter) sim = jaccard(T, mirrored ? mirrorSet(c) : c.set);
+      else {
+        const a = jaccard(T, c.set);
+        const b = st.mirror ? jaccard(T, mirrorSet(c)) : 0;
+        if (b > a) { sim = b; mirrored = true; } else sim = a;
+      }
+    }
+    out.push({ c, mirrored, sim });
+  }
+
+  const nullLast = (a, b, f) => (a == null) - (b == null) || f();
+  const by = {
+    ascents: (a, b) => b.c.asc - a.c.asc,
+    stars: (a, b) => nullLast(a.c.stars, b.c.stars, () => b.c.stars - a.c.stars) || b.c.asc - a.c.asc,
+    easy: (a, b) => nullLast(a.c.diff, b.c.diff, () => a.c.diff - b.c.diff) || b.c.asc - a.c.asc,
+    hard: (a, b) => nullLast(a.c.diff, b.c.diff, () => b.c.diff - a.c.diff) || b.c.asc - a.c.asc,
+    new: (a, b) => (b.c.date || "").localeCompare(a.c.date || ""),
+    name: (a, b) => a.c.name.localeCompare(b.c.name),
+  }[st.sort];
+  out.sort(st.similar ? (a, b) => b.sim - a.sim || by(a, b) : by);
+  return out;
+}
+
+// ---------- rendering ----------
+
+function gradeHtml(c) {
+  if (!c.g) return `<span class="ungraded">No grade</span>`;
+  return `<span class="v">${esc(c.g.v)}</span><span class="font">${esc(c.g.font)}</span>`;
+}
+
+function renderList() {
+  const list = $("results");
+  const shown = results.slice(0, st.limit);
+  if (!results.length) {
+    list.innerHTML = `<li class="empty">No climbs match. Try widening the grade range, lowering the ascents or stars, or clearing some holds.</li>`;
+  } else {
+    list.innerHTML = shown.map((r, k) => {
+      const c = r.c;
+      const sel = st.selected && st.selected.c === c && st.selected.mirrored === r.mirrored;
+      const tags = [];
+      if (r.sim != null) tags.push(`<span class="tag sim">${Math.round(r.sim * 100)}% similar</span>`);
+      if (r.mirrored) tags.push(`<span class="tag">Mirrored</span>`);
+      if (c.bench) tags.push(`<span class="tag">Benchmark</span>`);
+      const sub = [c.setter, c.date].filter(Boolean).map(esc).join(", ");
+      return `<li><button class="climb" data-k="${k}" aria-pressed="${sel}">
+        <span>${gradeHtml(c)}</span>
+        <span>
+          <span class="name">${esc(c.name)}</span>
+          ${sub ? `<span class="sub"><br>${sub}</span>` : ""}
+          ${tags.length ? `<span class="tags">${tags.join("")}</span>` : ""}
+        </span>
+        <span class="nums">
+          <span class="asc">${fmt(c.asc)}</span> ascents<br>
+          <span class="stars">${c.stars != null ? "★ " + c.stars.toFixed(1) : "no rating"}</span>
+        </span>
+      </button></li>`;
+    }).join("");
+  }
+  $("more").hidden = results.length <= st.limit;
+  const n = results.length;
+  $("count").textContent = `${fmt(n)} climb${n === 1 ? "" : "s"}`;
+
+  const chip = $("simchip");
+  if (st.similar) {
+    chip.innerHTML = `<span class="similar-chip">Most similar to ${esc(st.similar.c.name)} first
+      <button class="btn quiet" id="stopsim">Stop</button></span>`;
+    $("stopsim").onclick = () => { st.similar = null; st.limit = PAGE; update(); };
+  } else chip.textContent = "";
+}
+
+function legendSvg(code) {
+  const s = el("svg", { viewBox: "-5 -5 10 10" });
+  roleShape(code, 0, 0, st.colours[code], s, 1);
+  return s.outerHTML;
+}
+function legendHtml() {
+  return `<div class="legend">${ROLES.map((r, i) => `<span>${legendSvg(i)} ${r}</span>`).join("")}</div>`;
+}
+
+function renderSide() {
+  const side = $("side");
+  if (st.selected) {
+    const { c, mirrored } = st.selected;
+    const grade = c.g ? `${esc(c.g.v)} / ${esc(c.g.font)}` : "No ascents at this angle";
+    side.className = "panel detail";
+    side.innerHTML = `
+      <h2>${esc(c.name)}${mirrored ? " (mirrored)" : ""}</h2>
+      <div class="grade-line">${grade}${c.bench ? ", benchmark" : ""}</div>
+      <dl>
+        <dt>Ascents</dt><dd>${fmt(c.asc)}</dd>
+        <dt>Stars</dt><dd>${c.stars != null ? c.stars.toFixed(1) + " of 3" : "No rating yet"}</dd>
+        ${c.setter ? `<dt>Setter</dt><dd>${esc(c.setter)}</dd>` : ""}
+        ${c.date ? `<dt>Set on</dt><dd>${esc(c.date)}</dd>` : ""}
+        <dt>Holds</dt><dd>${c.holds.length}</dd>
+      </dl>
+      ${legendHtml()}
+      <div class="actions" style="margin-top:12px">
+        ${bt.connected() ? `<button class="btn primary" id="lightup">Light up on board</button>` : ""}
+        <button class="btn" id="findsim">Find similar climbs</button>
+        <button class="btn quiet" id="closesel">Close</button>
+      </div>
+      <p class="note" id="lightnote"></p>`;
+    $("findsim").onclick = () => {
+      st.similar = { c, set: mirrored ? mirrorSet(c) : c.set };
+      st.limit = PAGE;
+      update();
+      window.scrollTo({ top: 0 });
+    };
+    $("closesel").onclick = () => { st.selected = null; update(); };
+    const light = $("lightup");
+    if (light) light.onclick = () => bt.show(c, mirrored);
+  } else {
+    const nr = st.req.size, na = st.avoid.size;
+    const summary = nr || na ? `Must use ${nr} hold${nr === 1 ? "" : "s"}, must avoid ${na}.` : "No holds selected.";
+    side.className = "panel";
+    side.innerHTML = `
+      <p class="hint">Pick what a tap does above, then tap holds on the board. Tap a hold again to clear it.
+      "Must use" accepts the hold in any role; Start, Hand, Finish and Foot need that exact role.</p>
+      <div class="holdsum"><span>${summary}</span>
+        ${nr || na ? `<button class="btn quiet" id="clearholds">Clear holds</button>` : ""}</div>`;
+    const clear = $("clearholds");
+    if (clear) clear.onclick = () => { st.req.clear(); st.avoid.clear(); st.limit = PAGE; update(); };
+  }
+}
+
+function update() {
+  results = run();
+  renderList();
+  renderSide();
+  drawMarks();
+  drawLeds();
+}
+
+// ---------- controls ----------
+
+function buildModes() {
+  $("modes").innerHTML = MODES.map(m =>
+    `<button data-mode="${m.key}" aria-pressed="${m.key === st.mode}">${m.label}</button>`).join("");
+  $("modes").addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    st.mode = b.dataset.mode;
+    for (const x of $("modes").children) x.setAttribute("aria-pressed", x.dataset.mode === st.mode);
+  });
+}
+
+function buildGrades() {
+  const opts = grades.map(g => `<option value="${g.d}">${esc(g.v)} / ${esc(g.font)}</option>`).join("");
+  $("gmin").innerHTML = opts;
+  $("gmax").innerHTML = opts;
+  st.gMin = grades.length ? grades[0].d : 0;
+  st.gMax = grades.length ? grades[grades.length - 1].d : 99;
+  $("gmin").value = st.gMin;
+  $("gmax").value = st.gMax;
+}
+
+function buildColours() {
+  $("preset").value = st.preset;
+  const draw = () => {
+    $("pickers").innerHTML = ROLES.map((r, i) =>
+      `<div class="colour-row"><input type="color" id="col${i}" value="${st.colours[i]}" aria-label="${r} colour">
+       <span>${legendSvg(i)}</span> ${r}</div>`).join("");
+    ROLES.forEach((r, i) => $("col" + i).addEventListener("input", e => {
+      st.colours[i] = e.target.value;
+      st.preset = "custom";
+      $("preset").value = "custom";
+      saveColours();
+    }));
+  };
+  const saveColours = () => {
+    store.set("colours", { preset: st.preset, colours: st.colours });
+    renderSide(); drawLeds();
+    const svgs = $("pickers").querySelectorAll(".colour-row span");
+    svgs.forEach((s, i) => s.innerHTML = legendSvg(i));
+  };
+  $("preset").addEventListener("change", e => {
+    st.preset = e.target.value;
+    if (PRESETS[st.preset]) st.colours = PRESETS[st.preset].slice();
+    draw();
+    saveColours();
+  });
+  draw();
+}
+
+function bind() {
+  let timer;
+  $("q").addEventListener("input", e => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { st.q = e.target.value; st.limit = PAGE; update(); }, 120);
+  });
+  const onChange = (id, fn) => $(id).addEventListener("change", e => { fn(e.target); st.limit = PAGE; update(); });
+  onChange("gmin", t => { st.gMin = +t.value; if (st.gMin > st.gMax) { st.gMax = st.gMin; $("gmax").value = st.gMax; } });
+  onChange("gmax", t => { st.gMax = +t.value; if (st.gMax < st.gMin) { st.gMin = st.gMax; $("gmin").value = st.gMin; } });
+  onChange("minasc", t => st.minAsc = +t.value);
+  onChange("minstars", t => st.minStars = +t.value);
+  onChange("sort", t => st.sort = t.value);
+  onChange("bench", t => st.bench = t.checked);
+  onChange("mirror", t => st.mirror = t.checked);
+  onChange("ungraded", t => st.ungraded = t.checked);
+
+  $("results").addEventListener("click", e => {
+    const b = e.target.closest(".climb");
+    if (!b) return;
+    const r = results[+b.dataset.k];
+    const same = st.selected && st.selected.c === r.c && st.selected.mirrored === r.mirrored;
+    st.selected = same ? null : { c: r.c, mirrored: r.mirrored };
+    renderList(); renderSide(); drawLeds();
+    if (!same && window.matchMedia("(max-width: 820px)").matches) window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  $("more").addEventListener("click", () => { st.limit += PAGE; renderList(); });
+}
+
+// ---------- lighting the board over Bluetooth ----------
+// Aurora LED kits (Tension, Kilter...) speak a reverse-engineered protocol over
+// Bluetooth Low Energy: framed messages of LED position + colour.
+
+const AURORA_SERVICE = "4488b571-7806-4df6-bcff-a2897e4953ff";
+const UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const UART_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [0, 2, 4].map(k => parseInt(h.slice(k, k + 2), 16));
+}
+
+function frame(payload) {
+  let sum = 0;
+  for (const b of payload) sum = (sum + b) & 0xff;
+  return [0x01, payload.length, (~sum) & 0xff, 0x02, ...payload, 0x03];
+}
+
+// leds: [{pos, rgb}] -> bytes for the board, split into as many messages as needed
+function encodeLeds(leds, api) {
+  const v3 = api >= 3;
+  const per = v3 ? 3 : 2;
+  const cmd = v3 ? { single: 84, start: 82, cont: 81, end: 83 } : { single: 80, start: 78, cont: 77, end: 79 };
+
+  let scale = 1;
+  if (!v3) {   // v2 kits: keep total power under 18 W, like the official app
+    for (const s of [1, 0.8, 0.6, 0.4, 0.2, 0.1, 0.05]) {
+      const watts = leds.reduce((t, l) => t + l.rgb.reduce((a, c) => a + Math.floor(Math.floor(c * s) / 64), 0) / 30, 0);
+      scale = s;
+      if (watts <= 18) break;
+    }
+  }
+  const enc = ({ pos, rgb: [r, g, b] }) => v3
+    ? [pos & 0xff, (pos >> 8) & 0xff, ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6)]
+    : [pos & 0xff,
+       (Math.floor(Math.floor(r * scale) / 64) << 6) | (Math.floor(Math.floor(g * scale) / 64) << 4) |
+       (Math.floor(Math.floor(b * scale) / 64) << 2) | ((pos >> 8) & 0x03)];
+
+  const parts = [[]];
+  for (const l of leds) {
+    if (!v3 && l.pos > 1023) continue;
+    if ((parts[parts.length - 1].length + 1) * per + 1 > 255) parts.push([]);
+    parts[parts.length - 1].push(l);
+  }
+  return parts.flatMap((part, k) => {
+    const c = parts.length === 1 ? cmd.single : k === 0 ? cmd.start : k === parts.length - 1 ? cmd.end : cmd.cont;
+    return frame([c, ...part.flatMap(enc)]);
+  });
+}
+
+const bt = {
+  device: null, rx: null, api: 2,
+  connected() { return !!(this.rx && this.device && this.device.gatt.connected); },
+
+  setup() {
+    const btn = $("btconnect");
+    if (!navigator.bluetooth) {
+      btn.disabled = true;
+      $("bttext").textContent = window.isSecureContext
+        ? "Bluetooth needs Chrome or Edge (Android or desktop)"
+        : "Bluetooth needs a secure page: open via localhost or HTTPS";
+      return;
+    }
+    btn.onclick = () => this.connected() ? this.disconnect() : this.connect();
+  },
+
+  status(text, on) {
+    $("bttext").textContent = text;
+    $("btstatus").classList.toggle("on", !!on);
+    $("btconnect").textContent = on ? "Disconnect" : "Connect board";
+  },
+
+  async connect() {
+    try {
+      this.status("Choose your board…");
+      this.device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [AURORA_SERVICE] }, { namePrefix: "Tension" }],
+        optionalServices: [UART_SERVICE],
+      });
+      const m = /@(\d+)/.exec(this.device.name || "");
+      this.api = m ? parseInt(m[1], 10) : 2;
+      this.device.addEventListener("gattserverdisconnected", () => { this.rx = null; this.status("Board disconnected"); renderSide(); });
+      const server = await this.device.gatt.connect();
+      const service = await server.getPrimaryService(UART_SERVICE);
+      this.rx = await service.getCharacteristic(UART_RX);
+      this.status(`Connected to ${this.device.name || "board"}`, true);
+      renderSide();
+    } catch (e) {
+      this.rx = null;
+      this.status(e.name === "NotFoundError" ? "No board chosen" : "Couldn't connect: " + e.message);
+    }
+  },
+
+  disconnect() {
+    if (this.device && this.device.gatt.connected) this.device.gatt.disconnect();
+    this.rx = null;
+    this.status("Board not connected");
+    renderSide();
+  },
+
+  async write(bytes) {
+    const noReply = this.rx.properties.writeWithoutResponse;
+    for (let i = 0; i < bytes.length; i += 20) {
+      const chunk = new Uint8Array(bytes.slice(i, i + 20));
+      if (noReply) await this.rx.writeValueWithoutResponse(chunk);
+      else await this.rx.writeValueWithResponse(chunk);
+    }
+  },
+
+  async show(c, mirrored) {
+    const note = $("lightnote");
+    const leds = [];
+    let missing = 0;
+    c.holds.forEach((h, k) => {
+      const i = mirrored ? mirrorOf[h] : h;
+      const pos = i >= 0 ? holes[i][2] : null;
+      if (pos == null) { missing++; return; }
+      leds.push({ pos, rgb: hexToRgb(st.colours[c.roles[k]] || "#ffffff") });
+    });
+    try {
+      await this.write(encodeLeds(leds, this.api));
+      if (note) note.textContent = `Lit ${leds.length} holds` + (missing ? `; ${missing} have no LED position for your board size.` : ".");
+    } catch (e) {
+      if (note) note.textContent = "Couldn't send to the board: " + e.message;
+    }
+  },
+};
+
+init();
+</script>
+</body>
+</html>
