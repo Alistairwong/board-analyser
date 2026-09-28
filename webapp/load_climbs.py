@@ -7,11 +7,10 @@ data the video matcher compares detected LEDs against.
 import json
 import re
 import sqlite3
-from pathlib import Path
 
-from config import PRODUCT_ID, LAYOUT_ID, PRODUCT_SIZE_ID, CLIMBS_PATH
+from config import CLIMBS_PATH, DATA_DIR, LAYOUT_ID, PRODUCT_ID, PRODUCT_SIZE_ID
 
-DB_PATH = Path("data/tension.db")
+DB_PATH = DATA_DIR / "tension.db"
 
 # A climb's "frames" string looks like p123r5p456r6... (placement id, role id)
 TOKEN = re.compile(r"p(\d+)r(\d+)")

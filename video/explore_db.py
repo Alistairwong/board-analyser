@@ -1,6 +1,8 @@
 import sqlite3
 
-con = sqlite3.connect("data/tension.db")
+from config import DATA_DIR
+
+con = sqlite3.connect(DATA_DIR / "tension.db")
 cur = con.cursor()
 
 tables = [r[0] for r in cur.execute(

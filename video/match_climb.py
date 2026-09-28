@@ -7,7 +7,7 @@ missed or extra hold costs a little. Roles break ties; start and middle are
 treated as one "hand" role because they look almost the same on camera.
 
 Usage:
-    python match_climb.py test1 [--top 5]
+    python video/match_climb.py test1 [--top 5]
 
 Reads data/detections/<name>.json (from detect_leds.py) and writes
 data/detections/<name>_match.json.
@@ -17,10 +17,10 @@ import json
 import sqlite3
 from pathlib import Path
 
-from config import CLIMBS_PATH, ANGLE
+from config import ANGLE, CLIMBS_PATH, DATA_DIR
 
-DB_PATH = Path("data/tension.db")
-DETECT_DIR = Path("data/detections")
+DB_PATH = DATA_DIR / "tension.db"
+DETECT_DIR = DATA_DIR / "detections"
 HAND_ROLES = {"start", "middle"}
 
 
@@ -41,6 +41,28 @@ def load_climbs():
 
 def mirror(holds):
     return {(-x, y): r for (x, y), r in holds.items()}
+
+
+def full_climb_holds(best, hole_by_pos):
+    """The climb's own complete hold list from the database, for use once
+    we're confident which climb this is. LED detection alone can miss a
+    dim/occluded hold (e.g. a hand blocking it the whole clip); once the
+    climb is identified, its official hold list is complete and correct.
+
+    best: a result from match(), used for its uuid and mirrored flag.
+    hole_by_pos: {(x, y): hole_id}, from calibrate.load_holes().
+    """
+    data = json.loads(Path(CLIMBS_PATH).read_text())
+    roles = {int(k): v["name"] for k, v in data["roles"].items()}
+    climb = next(c for c in data["climbs"] if c["uuid"] == best["uuid"])
+    holds = []
+    for h in climb["holds"]:
+        x, y = (-h["x"], h["y"]) if best["mirrored"] else (h["x"], h["y"])
+        hole_id = hole_by_pos.get((x, y))
+        if hole_id is None:
+            continue   # shouldn't happen for a climb that fits this board size
+        holds.append({"hole_id": hole_id, "x": x, "y": y, "role_name": roles.get(h["role"])})
+    return holds
 
 
 def score(climb_holds, detected):

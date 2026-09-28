@@ -6,12 +6,11 @@ search.py runs this automatically when the database has changed.
 """
 import json
 import sqlite3
-from pathlib import Path
 
-from config import ANGLE, CLIMBS_PATH, LAYOUT_ID, PRODUCT_ID, PRODUCT_SIZE_ID
+from config import ANGLE, CLIMBS_PATH, DATA_DIR, LAYOUT_ID, PRODUCT_ID, PRODUCT_SIZE_ID
 
-DB_PATH = Path("data/tension.db")
-OUT = Path("data/search/climbs.json")
+DB_PATH = DATA_DIR / "tension.db"
+OUT = DATA_DIR / "search" / "climbs.json"
 ROLE_CODES = {"start": 0, "middle": 1, "finish": 2, "foot": 3}
 
 
@@ -75,7 +74,7 @@ def export():
     leds = led_positions(con)
     sets, set_names = hole_sets(con)
 
-    data = json.loads(Path(CLIMBS_PATH).read_text())
+    data = json.loads(CLIMBS_PATH.read_text())
     role_names = {int(k): v["name"] for k, v in data["roles"].items()}
 
     cols = {r[1] for r in con.execute("PRAGMA table_info(climbs)")}

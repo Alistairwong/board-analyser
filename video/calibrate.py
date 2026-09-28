@@ -5,7 +5,7 @@ the perspective transform (homography) from board inches to image pixels,
 then draws every hole on the frame so you can check the alignment by eye.
 
 Usage:
-    python calibrate.py path/to/video.mp4 [--time 1.0] [--name tripod-left]
+    python video/calibrate.py path/to/video.mp4 [--time 1.0] [--name tripod-left]
 
 The calibration is saved to data/calibrations/<name>.json and can be reused
 for every clip filmed from the same camera position.
@@ -18,10 +18,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from config import LAYOUT_ID, PRODUCT_SIZE_ID
+from config import DATA_DIR, LAYOUT_ID, PRODUCT_SIZE_ID
 
-DB_PATH = Path("data/tension.db")
-CALIB_DIR = Path("data/calibrations")
+DB_PATH = DATA_DIR / "tension.db"
+CALIB_DIR = DATA_DIR / "calibrations"
 MAX_DISPLAY = 1200      # longest side of the on-screen window, in pixels
 WIN = "calibrate"
 

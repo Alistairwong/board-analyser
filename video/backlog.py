@@ -16,9 +16,9 @@ session is the same climb (and that climb also fits the uncertain clip
 reasonably well), or if 3+ uncertain clips in a row share the same best guess.
 
 Usage:
-    python backlog.py                          # processes data/backlog/
-    python backlog.py --folder D:/old-clips    # a different folder
-    python backlog.py --keep                   # report only, don't move files
+    python video/backlog.py                          # processes data/backlog/
+    python video/backlog.py --folder D:/old-clips    # a different folder
+    python video/backlog.py --keep                   # report only, don't move files
 
 Results go in data/results/, plus a spreadsheet of every recognised clip so
 far: data/results/backlog.csv
@@ -34,19 +34,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from autocalibrate import auto_calibrate
+from config import DATA_DIR
 from detect_leds import detect
-from recognise import RESULTS_DIR, finish, grade_text
+from recognise import GOOD, RESULTS_DIR, finish, grade_text
 
 VIDEO_TYPES = {".mov", ".mp4", ".m4v", ".avi", ".mkv"}
-GOOD = {"confident", "likely", "tied"}
 SESSION = {"session", "repeated"}        # accepted by the session check
 ACCEPTED = GOOD | SESSION
 MAX_GAP = timedelta(minutes=15)         # longer gap between clips = new session
 MIN_SUPPORT = 0.5                       # a clip must overlap the climb at least this much
 RUN_LENGTH = 3                          # uncertain clips in a row with the same guess
-BACKLOG_DIR = Path("data/backlog")
-PROCESSED_DIR = Path("data/processed")
-MANUAL_DIR = Path("data/manual")
+BACKLOG_DIR = DATA_DIR / "backlog"
+PROCESSED_DIR = DATA_DIR / "processed"
+MANUAL_DIR = DATA_DIR / "manual"
 CSV_PATH = RESULTS_DIR / "backlog.csv"
 BAR_WIDTH = 20
 

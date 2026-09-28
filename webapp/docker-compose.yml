@@ -6,7 +6,7 @@ services:
     ports:
       - "8010:8000"          # http://nas-server:8010 on your network
     volumes:
-      - ./data:/app/data     # tension.db and exported climbs live here, outside the container
+      - ../data:/app/data    # shared with video/; tension.db and exported climbs live here
     env_file:
       - path: .env           # TENSION_USERNAME / TENSION_PASSWORD for syncing new climbs
         required: false

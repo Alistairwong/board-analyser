@@ -7,7 +7,7 @@ with their colour. Occlusion by the climber is handled by looking at many
 frames and taking a high percentile rather than any single frame.
 
 Usage:
-    python detect_leds.py data/test1.mov [--calib test1] [--fps 5] [--percentile 75]
+    python video/detect_leds.py data/test1.mov [--calib test1] [--fps 5] [--percentile 75]
 
 Writes data/detections/<video>.json and <video>_leds.png (an overlay to check).
 """
@@ -19,10 +19,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from config import CLIMBS_PATH
+from config import CLIMBS_PATH, DATA_DIR
 from calibrate import DB_PATH, CALIB_DIR, load_holes, grab_frame
 
-DETECT_DIR = Path("data/detections")
+DETECT_DIR = DATA_DIR / "detections"
 PATCH_INCHES = 1.5      # radius around each hole to look for an LED
 THRESHOLD_K = 4.5       # lit = this many spreads above a typical unlit hole
 MIN_THRESHOLD = 20      # never call anything below this lit

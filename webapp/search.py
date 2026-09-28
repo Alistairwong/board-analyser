@@ -1,13 +1,13 @@
 """Open the climb search page in your browser.
 
-Usage:
-    python search.py                  # http://localhost:8000
-    python search.py --port 8080
-    python search.py --host 0.0.0.0   # let other devices on your network use it
-    python search.py --reexport       # rebuild the climb data first
+Usage (from anywhere):
+    python webapp/search.py                  # http://localhost:8000
+    python webapp/search.py --port 8080
+    python webapp/search.py --host 0.0.0.0   # let other devices on your network use it
+    python webapp/search.py --reexport       # rebuild the climb data first
 
-    python search.py --sync           # update the climb database from Tension first
-    python search.py --sync-only      # update the database and exit (for a scheduled job)
+    python webapp/search.py --sync           # update the climb database from Tension first
+    python webapp/search.py --sync-only      # update the database and exit (for a scheduled job)
 
 The climb data is rebuilt automatically when tension.db or the climbs file
 changes, even while the server is running. Press Ctrl+C to stop the server.
@@ -22,15 +22,14 @@ import threading
 import webbrowser
 from pathlib import Path
 
-# Work from the project folder, wherever the command is run from
-PROJECT = Path(__file__).resolve().parent
-os.chdir(PROJECT)
+HERE = Path(__file__).resolve().parent
 
 from config import CLIMBS_PATH
 from export_search import DB_PATH, OUT, export
 
-PAGE = Path("search/index.html")
-STATIC = Path("search")
+PAGE = HERE / "search" / "index.html"
+STATIC = HERE / "search"
+LOAD_CLIMBS = HERE / "load_climbs.py"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".json": "application/json",
                 ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
                 ".svg": "image/svg+xml", ".js": "text/javascript; charset=utf-8",
@@ -56,14 +55,14 @@ def sync_database():
         print("No TENSION_USERNAME set, so only the climbs bundled with the app are available.")
     # BoardLib asks for the password at a prompt; answer it from the environment
     subprocess.run(cmd, check=True, text=True, input=(password + "\n") if user else None)
-    subprocess.run([sys.executable, "load_climbs.py"], check=True)
+    subprocess.run([sys.executable, str(LOAD_CLIMBS)], check=True)
 
 
 def ensure_data():
     if not DB_PATH.exists():
         sync_database()
-    elif not Path(CLIMBS_PATH).exists():
-        subprocess.run([sys.executable, "load_climbs.py"], check=True)
+    elif not CLIMBS_PATH.exists():
+        subprocess.run([sys.executable, str(LOAD_CLIMBS)], check=True)
 
 
 def export_if_needed():
@@ -76,8 +75,8 @@ def needs_export():
     if not OUT.exists():
         return True
     # rebuild when the data changes, or when the export itself has been updated
-    newest_source = max(DB_PATH.stat().st_mtime, Path(CLIMBS_PATH).stat().st_mtime,
-                        Path("export_search.py").stat().st_mtime)
+    newest_source = max(DB_PATH.stat().st_mtime, CLIMBS_PATH.stat().st_mtime,
+                        (HERE / "export_search.py").stat().st_mtime)
     return OUT.stat().st_mtime < newest_source
 
 
@@ -148,8 +147,8 @@ def main():
     ensure_data()
 
     if not PAGE.exists():
-        print(f"Can't find the search page. It should be at:\n  {PROJECT / PAGE}")
-        found = [f for f in PROJECT.rglob("index*.htm*") if ".venv" not in f.parts]
+        print(f"Can't find the search page. It should be at:\n  {PAGE}")
+        found = list(HERE.rglob("index*.htm*"))
         if found:
             print("Found these instead; move or rename one to the path above:")
             for f in found:

@@ -4,11 +4,11 @@ For each video: pick a calibration, detect the lit holds, match them against
 the climb database, and save the result to data/results/<video>.json.
 
 Usage:
-    python recognise.py data/clip.mov
-    python recognise.py data/*.mov                 # several at once (works on Windows too)
-    python recognise.py data/clip.mov --calib tripod-left
-    python recognise.py data/clip.mov --calibrate  # click corners for this video's camera spot
-    python recognise.py data/clip.mov --verbose    # show the full detection printout
+    python video/recognise.py data/clip.mov
+    python video/recognise.py data/*.mov                 # several at once (works on Windows too)
+    python video/recognise.py data/clip.mov --calib tripod-left
+    python video/recognise.py data/clip.mov --calibrate  # click corners for this video's camera spot
+    python video/recognise.py data/clip.mov --verbose    # show the full detection printout
 
 Calibration used, in order: --calib if given, then one named after the video,
 then DEFAULT_CALIB from config.py, otherwise you're asked to click corners.
@@ -16,15 +16,17 @@ then DEFAULT_CALIB from config.py, otherwise you're asked to click corners.
 import argparse
 import glob
 import json
+import sqlite3
 from pathlib import Path
 
-from config import DEFAULT_CALIB
-from calibrate import CALIB_DIR, calibrate
+from config import DATA_DIR, DEFAULT_CALIB
+from calibrate import CALIB_DIR, DB_PATH, calibrate, load_holes
 from autocalibrate import auto_calibrate
 from detect_leds import detect
-from match_climb import match, print_matches, grade_text
+from match_climb import full_climb_holds, match, print_matches, grade_text
 
-RESULTS_DIR = Path("data/results")
+RESULTS_DIR = DATA_DIR / "results"
+GOOD = {"confident", "likely", "tied"}
 
 
 def pick_calibration(video, calib=None, force=False):
@@ -84,6 +86,36 @@ def finish(video, calib_name, det):
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / f"{video.stem}.json").write_text(json.dumps(result, indent=2))
     return result
+
+
+def resolved_holds(video, calib_name, verbose=True):
+    """The best hold list to use for further analysis (e.g. movement.py).
+
+    If we're confident which climb this is, use its full hold list from the
+    database instead of just what was detected lit -- LED detection alone
+    can miss a dim or occluded hold. Falls back to the detected holds when
+    the match isn't confident enough to trust.
+    """
+    say = print if verbose else (lambda *a, **k: None)
+    det = detect(video, calib_name, verbose=False)
+    if not det["lit"]:
+        raise SystemExit(f"No lit holds detected in {video}.")
+
+    top = match(det["lit"], top=5)
+    verdict, ties = assess(top)
+    if top and verdict in GOOD:
+        best = top[0]
+        hole_by_pos = {(x, y): hid for hid, _, x, y in load_holes(sqlite3.connect(DB_PATH))}
+        holds = full_climb_holds(best, hole_by_pos)
+        tag = " (mirrored)" if best["mirrored"] else ""
+        say(f"Recognised as {best['name']}{tag} ({verdict}, {best['jaccard']:.0%} match): "
+            f"using its full {len(holds)}-hold list instead of the "
+            f"{len(det['lit'])} holds actually detected lit.")
+    else:
+        holds = det["lit"]
+        say(f"Climb not confidently recognised ({verdict}); "
+            f"using the {len(holds)} holds actually detected lit.")
+    return holds
 
 
 def one_line(r):

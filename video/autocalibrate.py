@@ -7,8 +7,8 @@ calibration you clicked by hand, fits that transform, and chains it with the
 hand calibration to get the new one.
 
 Usage:
-    python autocalibrate.py data/backlog/clip.mov [--name gym-left] [--ref test1]
-    python autocalibrate.py "data/backlog/*.mov"
+    python video/autocalibrate.py data/backlog/clip.mov [--name gym-left] [--ref test1]
+    python video/autocalibrate.py "data/backlog/*.mov"
 
 It needs at least one hand-made calibration to use as a reference.
 """
