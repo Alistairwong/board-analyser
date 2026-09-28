@@ -2,8 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Climb search</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#1b1f22">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Climbs">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
@@ -24,6 +31,7 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--body); }
+body { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
 button, input, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
@@ -60,6 +68,13 @@ button, input, select { font: inherit; color: inherit; }
 .infobar .nav .btn.primary { font-size: 14px; padding: 4px 10px; }
 .autolight { display: none; font-size: 14px; align-items: center; gap: 6px; cursor: pointer; }
 .bt-status.on .autolight { display: inline-flex; }
+
+.gen h2 { font: 600 20px/1.2 var(--cond); margin: 0 0 10px; }
+.gen-row { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 10px; }
+.gen .field select { background: var(--raise); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--text); }
+.saved-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.saved-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }
+.saved-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 .modes { display: flex; flex-wrap: wrap; gap: 4px; }
 .modes button {
@@ -151,7 +166,7 @@ ol.results li + li { border-top: 1px solid var(--line); }
   .app { grid-template-columns: 1fr; padding: 0 14px 14px; gap: 16px; }
   .board-col { position: static; width: 100%; min-width: 0; max-height: none; overflow: visible; }
   /* The current climb and board stay pinned at the top while the list scrolls */
-  .viewer { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 10px 0 8px; margin: 0 -14px; padding-left: 14px; padding-right: 14px; }
+  .viewer { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding: 10px 0 8px; margin: 0 -14px; padding-left: 14px; padding-right: 14px; }
   .infobar { display: block; margin-bottom: 8px; }
   #board { height: min(52vh, 560px); width: auto; max-width: 100%; margin: 0 auto; }
   .climb { grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; }
@@ -186,6 +201,24 @@ ol.results li + li { border-top: 1px solid var(--line); }
     </div>
 
     <section class="panel" id="side"></section>
+
+    <section class="panel gen">
+      <h2>Generate a climb</h2>
+      <div class="gen-row">
+        <label class="field">Grade <select id="gengrade"></select></label>
+        <label class="field">Length
+          <select id="genlen">
+            <option value="any">Any</option>
+            <option value="short">Short (up to 4 moves)</option>
+            <option value="medium">Medium (5 to 7 moves)</option>
+            <option value="long">Long (8 or more)</option>
+          </select>
+        </label>
+      </div>
+      <button class="btn primary" id="genbtn">Generate</button>
+      <p class="note" id="gennote">New climbs are pieced together from how real climbs at that grade move between holds, then graded against the most similar real climbs.</p>
+      <div id="saved"></div>
+    </section>
 
     <section class="panel">
       <details class="colours" id="colours">
@@ -360,6 +393,7 @@ async function init() {
   buildColours();
   bind();
   bindSwipe();
+  buildGenerator();
   bt.setup();
   update();
 }
@@ -602,7 +636,9 @@ function legendHtml() {
 
 function renderSide() {
   const side = $("side");
-  if (st.selected) {
+  if (st.selected && st.selected.c.generated) {
+    renderGeneratedSide(side);
+  } else if (st.selected) {
     const { c, mirrored } = st.selected;
     const grade = c.g ? `${esc(c.g.v)} / ${esc(c.g.font)}` : "No ascents at this angle";
     side.className = "panel detail";
@@ -645,6 +681,266 @@ function renderSide() {
   }
 }
 
+// ---------- climb generator ----------
+// Learns from real climbs at the chosen grade: which start holds they use, how
+// hands move from hold to hold on the way up, where they finish, and which feet
+// go with which hand holds. It samples new climbs from those patterns, then
+// estimates each one's grade from the 10 most similar real climbs and keeps the
+// candidate closest to the target that isn't just a copy of an existing climb.
+
+const gen = {
+  ready: false, bands: [], graded: [], index: null, models: new Map(), count: 0,
+
+  prepare() {
+    if (this.ready) return;
+    const byV = new Map();
+    for (const g of grades) {
+      const r = byV.get(g.v);
+      if (r) { r.lo = Math.min(r.lo, g.d); r.hi = Math.max(r.hi, g.d); }
+      else byV.set(g.v, { v: g.v, font: g.font, lo: g.d, hi: g.d });
+    }
+    this.graded = climbs.filter(c => c.diff != null);
+    const used = new Set(this.graded.map(c => c.d));
+    this.bands = [...byV.values()].filter(b => [...used].some(d => d >= b.lo && d <= b.hi)).sort((a, b) => a.lo - b.lo);
+    this.index = new Map();
+    this.graded.forEach((c, n) => c.holds.forEach(h => {
+      let list = this.index.get(h);
+      if (!list) this.index.set(h, list = []);
+      list.push(n);
+    }));
+    this.ready = true;
+  },
+
+  model(band) {
+    if (this.models.has(band.v)) return this.models.get(band.v);
+    const inBand = c => c.d >= band.lo - 1 && c.d <= band.hi + 1;
+    let pool = this.graded.filter(c => inBand(c) && c.asc >= 3);
+    if (pool.length < 150) pool = this.graded.filter(inBand);
+    const T = new Map(), FT = new Map(), starts = [], moves = [], feetN = [];
+    const bump = (m, a, b, k) => {
+      let row = m.get(a);
+      if (!row) m.set(a, row = new Map());
+      const cell = row.get(b) || [0, 0];
+      cell[k]++;
+      row.set(b, cell);
+    };
+    const y = h => holes[h][1];
+    for (const c of pool) for (const mir of [false, true]) {     // the board is symmetric, so learn both ways
+      const hs = c.holds.map(h => mir ? mirrorOf[h] : h);
+      if (hs.some(h => h < 0)) continue;
+      const hands = [], feet = [];
+      hs.forEach((h, k) => (c.roles[k] === 3 ? feet : hands).push({ h, r: c.roles[k] }));
+      const st0 = hands.filter(x => x.r === 0).map(x => x.h);
+      if (!st0.length || !hands.some(x => x.r === 2)) continue;
+      const path = hands.filter(x => x.r !== 0).sort((a, b) => y(a.h) - y(b.h) || (a.r === 2) - (b.r === 2));
+      let prev = st0.reduce((a, b) => y(b) > y(a) ? b : a);
+      for (const x of path) { bump(T, prev, x.h, x.r === 2 ? 1 : 0); prev = x.h; }
+      for (const x of hands) for (const f of feet) bump(FT, x.h, f.h, 0);
+      starts.push(st0); moves.push(path.length); feetN.push(feet.length);
+    }
+    const m = { T, FT, starts, moves, feetN, size: pool.length };
+    this.models.set(band.v, m);
+    return m;
+  },
+
+  pick(weighted) {                       // weighted: [[item, weight], ...]
+    let total = 0;
+    for (const [, w] of weighted) total += w;
+    let r = Math.random() * total;
+    for (const [item, w] of weighted) { r -= w; if (r <= 0) return item; }
+    return weighted.length ? weighted[weighted.length - 1][0] : null;
+  },
+
+  sampleOne(m) {
+    if (!m.starts.length) return null;
+    const y = h => holes[h][1];
+    const starts = m.starts[Math.floor(Math.random() * m.starts.length)];
+    const used = new Set(starts);
+    let cur = starts.reduce((a, b) => y(b) > y(a) ? b : a);
+    const path = [];
+    for (let step = 0; step < 16; step++) {
+      const row = m.T.get(cur);
+      if (!row) return null;
+      const opts = [...row].filter(([j]) => !used.has(j) && y(j) >= y(cur) - 4);
+      if (!opts.length) return null;
+      const next = this.pick(opts.map(([j, [mv, fin]]) => [j, mv + fin]));
+      const [mv, fin] = row.get(next);
+      const finish = Math.random() < fin / (mv + fin);
+      used.add(next);
+      path.push({ h: next, r: finish ? 2 : 1 });
+      cur = next;
+      if (finish) break;
+    }
+    if (!path.length || path[path.length - 1].r !== 2) return null;
+
+    const nFeet = m.feetN[Math.floor(Math.random() * m.feetN.length)];
+    const score = new Map();
+    for (const h of [...starts, ...path.map(x => x.h)]) {
+      const row = m.FT.get(h);
+      if (row) for (const [f, [w]] of row) if (!used.has(f)) score.set(f, (score.get(f) || 0) + w);
+    }
+    const feet = [];
+    for (let k = 0; k < nFeet && score.size; k++) {
+      const f = this.pick([...score]);
+      feet.push(f);
+      score.delete(f);
+    }
+    return {
+      holds: [...starts, ...path.map(x => x.h), ...feet],
+      roles: [...starts.map(() => 0), ...path.map(x => x.r), ...feet.map(() => 3)],
+      moves: path.length,
+    };
+  },
+
+  estimate(holds) {
+    const S = new Set(holds), M = new Set(holds.map(h => mirrorOf[h]).filter(h => h >= 0));
+    const best = new Map();                  // climb -> {s, mirrored}
+    const tally = (set, mirrored) => {
+      const overlap = new Map();
+      for (const h of set) for (const n of this.index.get(h) || []) overlap.set(n, (overlap.get(n) || 0) + 1);
+      for (const [n, o] of overlap) {
+        const c = this.graded[n];
+        const s = o / (set.size + c.set.size - o);
+        const b = best.get(n);
+        if (!b || s > b.s) best.set(n, { s, mirrored });
+      }
+    };
+    tally(S, false);
+    tally(M, true);
+    const top = [...best].map(([n, b]) => ({ c: this.graded[n], ...b })).sort((a, b) => b.s - a.s).slice(0, 10);
+    if (!top.length) return null;
+    const wsum = top.reduce((t, x) => t + x.s, 0);
+    const d = top.reduce((t, x) => t + x.s * x.c.diff, 0) / wsum;
+    return { d, nearest: top[0] };
+  },
+
+  run(v, length) {
+    this.prepare();
+    const band = this.bands.find(b => b.v === v);
+    if (!band) return null;
+    const m = this.model(band);
+    const fits = n => length === "short" ? n <= 4 : length === "medium" ? n >= 5 && n <= 7 : length === "long" ? n >= 8 : true;
+    const centre = (band.lo + band.hi) / 2;
+    let best = null, valid = 0;
+    for (let tries = 0; tries < 400 && valid < 30; tries++) {
+      const cand = this.sampleOne(m);
+      if (!cand || !fits(cand.moves) || new Set(cand.holds).size !== cand.holds.length) continue;
+      const est = this.estimate(cand.holds);
+      if (!est) continue;
+      valid++;
+      let score = Math.abs(est.d - centre);
+      if (est.nearest.s >= 0.8) score += 5;          // basically an existing climb
+      if (!best || score < best.score) best = { ...cand, est, score };
+    }
+    if (!best) return null;
+    const c = this.makeClimb(best.holds, best.roles, best.est, `Generated climb ${++this.count}`);
+    c.target = band.v;
+    return c;
+  },
+
+  makeClimb(holds, roles, est, name) {
+    const d = Math.round(est ? est.d : 0);
+    const g = grades.find(x => x.d === d) || null;
+    return {
+      uuid: "gen-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+      name, setter: "", date: "", diff: est ? est.d : null, d, g, bench: false, asc: 0, stars: null,
+      holds, roles, set: new Set(holds), map: new Map(holds.map((h, k) => [h, roles[k]])),
+      mset: null, mmap: null, text: name.toLowerCase(), generated: true, est,
+    };
+  },
+};
+
+const saved = {
+  list() { return store.get("myclimbs") || []; },
+  put(list) { store.set("myclimbs", list); renderSaved(); },
+  has(c) { return this.list().some(x => x.id === c.uuid); },
+  save(c) {
+    const name = (window.prompt("Name this climb", c.name) || "").trim();
+    if (!name) return;
+    c.name = name;
+    this.put([...this.list(), { id: c.uuid, name, holds: c.holds, roles: c.roles, created: new Date().toISOString() }]);
+    showSelected();
+  },
+  open(id) {
+    const x = this.list().find(e => e.id === id);
+    if (!x) return;
+    gen.prepare();
+    const c = gen.makeClimb(x.holds, x.roles, gen.estimate(x.holds), x.name);
+    c.uuid = x.id;
+    st.selected = { c, mirrored: false };
+    showSelected();
+  },
+  remove(id) { this.put(this.list().filter(x => x.id !== id)); showSelected(); },
+};
+
+function renderSaved() {
+  const list = saved.list();
+  $("saved").innerHTML = list.length ? `<ul class="saved-list">${list.map(x =>
+    `<li><span>${esc(x.name)}</span>
+      <button class="btn" data-open="${esc(x.id)}">Open</button>
+      <button class="btn quiet" data-del="${esc(x.id)}" aria-label="Delete ${esc(x.name)}">Delete</button></li>`).join("")}</ul>` : "";
+}
+
+function renderGeneratedSide(side) {
+  const { c } = st.selected;
+  const near = c.est && c.est.nearest;
+  const est = c.g ? `about ${esc(c.g.v)} / ${esc(c.g.font)}` : "grade unknown";
+  const grade = c.target && (!c.g || c.g.v !== c.target)
+    ? `Aimed at ${esc(c.target)}, estimated ${est}` : est.charAt(0).toUpperCase() + est.slice(1);
+  side.className = "panel detail";
+  side.innerHTML = `
+    <h2>${esc(c.name)}</h2>
+    <div class="grade-line">${grade}</div>
+    <dl>
+      <dt>Holds</dt><dd>${c.holds.length}</dd>
+      <dt>Grade from</dt><dd>the 10 most similar real climbs</dd>
+      ${near ? `<dt>Closest real climb</dt><dd>${esc(near.c.name)}${near.mirrored ? " (mirrored)" : ""}, ${Math.round(near.s * 100)}% same holds</dd>` : ""}
+    </dl>
+    ${legendHtml()}
+    <div class="actions" style="margin-top:12px">
+      ${bt.connected() ? `<button class="btn primary" id="lightup">Light up on board</button>` : ""}
+      <button class="btn" id="genagain">Generate another</button>
+      ${saved.has(c) ? `<span class="note">Saved on this device</span>` : `<button class="btn" id="gensave">Save</button>`}
+      ${near ? `<button class="btn quiet" id="gennear">Open closest real climb</button>` : ""}
+    </div>
+    <p class="note" id="lightnote"></p>`;
+  const light = $("lightup");
+  if (light) light.onclick = () => bt.show(c, false);
+  $("genagain").onclick = generate;
+  const sv = $("gensave");
+  if (sv) sv.onclick = () => saved.save(c);
+  const nb = $("gennear");
+  if (nb) nb.onclick = () => { st.selected = { c: near.c, mirrored: near.mirrored }; showSelected(); };
+}
+
+function generate() {
+  const note = $("gennote");
+  const c = gen.run($("gengrade").value, $("genlen").value);
+  if (!c) {
+    note.textContent = "Couldn't build a climb with those settings. Try another length or grade.";
+    return;
+  }
+  note.textContent = "";
+  st.selected = { c, mirrored: false };
+  showSelected();
+  if (window.matchMedia("(max-width: 820px)").matches) window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function buildGenerator() {
+  gen.prepare();
+  $("gengrade").innerHTML = gen.bands.map(b => `<option value="${esc(b.v)}">${esc(b.v)} / ${esc(b.font)}</option>`).join("");
+  const mid = gen.bands[Math.floor(gen.bands.length / 3)];
+  if (mid) $("gengrade").value = mid.v;
+  $("genbtn").onclick = generate;
+  $("saved").addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.open) saved.open(b.dataset.open);
+    if (b.dataset.del && window.confirm("Delete this climb?")) saved.remove(b.dataset.del);
+  });
+  renderSaved();
+}
+
 // ---------- current climb: always one selected, swipe to move ----------
 
 function selectedIndex() {
@@ -656,6 +952,7 @@ function selectedIndex() {
 }
 
 function keepSelection() {
+  if (st.selected && st.selected.c.generated) return;
   const k = selectedIndex();
   if (k >= 0) st.selected = { c: results[k].c, mirrored: results[k].mirrored };
   else st.selected = results.length ? { c: results[0].c, mirrored: results[0].mirrored } : null;
@@ -666,11 +963,11 @@ function renderInfo() {
   if (!st.selected) { bar.innerHTML = `<div class="top"><span class="nm">No climbs match</span></div>`; return; }
   const { c, mirrored } = st.selected;
   const k = selectedIndex();
-  const grade = c.g ? `${esc(c.g.v)}<small>${esc(c.g.font)}</small>` : `<small>No grade</small>`;
+  const grade = c.g ? `${c.generated ? "~" : ""}${esc(c.g.v)}<small>${esc(c.g.font)}</small>` : `<small>No grade</small>`;
   bar.innerHTML = `
     <div class="top"><span class="nm">${esc(c.name)}${mirrored ? " (mirrored)" : ""}</span><span class="gr">${grade}</span></div>
     <div class="row2">
-      <span>${fmt(c.asc)} ascents, ${c.stars != null ? "★ " + c.stars.toFixed(1) : "no rating"}${k >= 0 ? `<br>${fmt(k + 1)} of ${fmt(results.length)}` : ""}</span>
+      <span>${c.generated ? "Generated climb, estimated grade" : `${fmt(c.asc)} ascents, ${c.stars != null ? "★ " + c.stars.toFixed(1) : "no rating"}`}${k >= 0 && !c.generated ? `<br>${fmt(k + 1)} of ${fmt(results.length)}` : ""}</span>
       <span class="nav">
         ${bt.connected() ? `<button class="btn primary" id="barlight">Light up</button>` : ""}
         <button class="btn" id="prevclimb" aria-label="Previous climb" ${k <= 0 ? "disabled" : ""}>‹</button>
@@ -867,9 +1164,11 @@ const bt = {
     const btn = $("btconnect");
     if (!navigator.bluetooth) {
       btn.disabled = true;
-      $("bttext").textContent = window.isSecureContext
-        ? "Bluetooth needs Chrome or Edge (Android or desktop)"
-        : "Bluetooth needs a secure page: open via localhost or HTTPS";
+      const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+      $("bttext").textContent = !window.isSecureContext
+        ? "Bluetooth needs a secure page: open via localhost or HTTPS"
+        : ios ? "To light the board on iPhone, open this page in the Bluefy app"
+        : "Bluetooth needs Chrome or Edge (Android or desktop)";
       return;
     }
     btn.onclick = () => this.connected() ? this.disconnect() : this.connect();
@@ -943,6 +1242,10 @@ const bt = {
 };
 
 init();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
 </script>
 </body>
 </html>
