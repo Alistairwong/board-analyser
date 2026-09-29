@@ -67,6 +67,7 @@ def ensure_data():
 
 def export_if_needed():
     with _export_lock:
+        ensure_data()             # rebuilds the climbs file if it has gone missing
         if needs_export():
             export()
 
