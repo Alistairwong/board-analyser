@@ -1,0 +1,9 @@
+# Keep the (large) data/ folder and everything else out of the build context
+*
+!video/config.py
+!video/calibrate.py
+!video/autocalibrate.py
+!video/detect_leds.py
+!video/match_climb.py
+!video/recognise.py
+!analyser/watch.py

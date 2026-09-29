@@ -95,6 +95,20 @@ outside Docker.
   pinned current climb + swipe on mobile, Web Bluetooth lighting (Aurora protocol, API v2/v3 framing),
   climb generator (learned from real climbs at the target grade, kNN grade estimate, options for hold set,
   hold size, move style, feet, start height, marked holds), saved generated climbs in localStorage.
+- `search/record.html` (served at `/record`): unattended recorder. Camera via `getUserMedia` (an iPhone
+  works as a Mac camera via Continuity Camera; iPad/iPhone can also just open the page), MediaPipe pose in
+  the browser, board region tapped once (stored in localStorage as 0-1 fractions). A wrist or toe inside
+  the region starts a `MediaRecorder` clip *immediately* (no pre-roll: later MediaRecorder chunks can't be
+  decoded on their own); it stops after N seconds clear, and clips with under `min-on` seconds on the board
+  are discarded (walk-bys). Clips are capped at 40 s (one attempt each; a longer effort continues in the next clip).
+  Finished clips are `POST`ed to `/upload` (`search.py` `do_POST`: mp4/webm only, 200 MB cap, server-made
+  filename) and saved in `data/recordings/`; failed uploads stay listed with a Retry button. One flat camera,
+  so someone walking in front of the board also counts. iOS stops the camera if the screen locks or the tab
+  is backgrounded, so keep the tab in front and the device awake (page uses the Wake Lock API).
+- `analyser/` (Docker, `docker compose up -d`): watches `data/recordings/`, auto-calibrates, matches the lit holds
+  against the climb DB (reusing `video/`'s code) and files each clip under `data/climbs/<climb>/` (or
+  `_unidentified/`, `_failed/`). Light work only; pose/movement analysis stays on request via `video/`.
+  Needs a hand-made calibration in `data/calibrations/` for auto-calibration to work.
 - `search/sw.js` + `manifest.webmanifest` + icons: referenced by `index.html` for an installable PWA with
   offline cache, but **these files don't actually exist yet** -- the feature is currently broken (silent,
   since the service-worker registration swallows the failure). Still outstanding.

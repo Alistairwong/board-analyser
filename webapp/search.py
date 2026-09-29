@@ -15,19 +15,25 @@ changes, even while the server is running. Press Ctrl+C to stop the server.
 import argparse
 import gzip
 import http.server
+import json
 import os
 import subprocess
 import sys
 import threading
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-from config import CLIMBS_PATH
+from config import CLIMBS_PATH, DATA_DIR
 from export_search import DB_PATH, OUT, export
 
 PAGE = HERE / "search" / "index.html"
+RECORD_PAGE = HERE / "search" / "record.html"
+RECORDINGS = DATA_DIR / "recordings"
+UPLOAD_TYPES = {"video/mp4": "mp4", "video/webm": "webm"}
+MAX_UPLOAD = 200 * 1024 * 1024
 STATIC = HERE / "search"
 LOAD_CLIMBS = HERE / "load_climbs.py"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".json": "application/json",
@@ -94,6 +100,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     ROUTES = {
         "/": (PAGE, "text/html; charset=utf-8"),
         "/index.html": (PAGE, "text/html; charset=utf-8"),
+        "/record": (RECORD_PAGE, "text/html; charset=utf-8"),
         "/climbs.json": (OUT, "application/json"),
     }
 
@@ -123,6 +130,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         if use_gzip:
             self.send_header("Content-Encoding", "gzip")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        """Save an uploaded clip from /record into data/recordings/ (name is server-made)."""
+        if self.path.split("?")[0] != "/upload":
+            return self.send_error(404)
+        ext = UPLOAD_TYPES.get(self.headers.get("Content-Type", "").split(";")[0].strip().lower())
+        length = self.headers.get("Content-Length", "")
+        if not ext:
+            return self.send_error(415)
+        if not length.isdigit() or int(length) == 0:
+            return self.send_error(411)
+        length = int(length)
+        if length > MAX_UPLOAD:
+            return self.send_error(413)
+        RECORDINGS.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest, n = RECORDINGS / f"{stamp}.{ext}", 0
+        while dest.exists():
+            n += 1
+            dest = RECORDINGS / f"{stamp}_{n}.{ext}"
+        part = dest.with_name(dest.name + ".part")
+        got = 0
+        with part.open("wb") as f:
+            while got < length:
+                chunk = self.rfile.read(min(1 << 20, length - got))
+                if not chunk:
+                    break
+                f.write(chunk)
+                got += len(chunk)
+        if got != length:                 # client dropped mid-upload
+            part.unlink()
+            return self.send_error(400)
+        part.rename(dest)
+        body = json.dumps({"name": dest.name, "bytes": got}).encode()
+        self.send_response(201)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 

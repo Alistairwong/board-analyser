@@ -1,0 +1,10 @@
+services:
+  clip-analyser:
+    build:
+      context: ..                    # repo root, so it can copy video/'s recognition code
+      dockerfile: analyser/Dockerfile
+    container_name: clip-analyser
+    restart: unless-stopped
+    mem_limit: 2g
+    volumes:
+      - ../data:/data                # recordings/ in, climbs/ out; also tension.db and calibrations/

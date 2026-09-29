@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Board recorder</title>
+<meta name="theme-color" content="#1b1f22">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #1b1f22; --panel: #242a2e; --raise: #2e353a; --line: #3a4247;
+  --text: #e8ebeb; --muted: #9aa4a8; --focus: #8fb8ff; --ok: #7fd1a0; --rec: #ff6b6b;
+  --cond: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--body); }
+body { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+main { max-width: 900px; margin: 0 auto; padding: 12px; display: grid; gap: 12px; }
+h1 { font: 600 20px var(--cond); margin: 0; letter-spacing: .02em; }
+.stage { position: relative; background: #000; border-radius: 8px; overflow: hidden; }
+.stage video, .stage canvas { display: block; width: 100%; height: auto; }
+.stage canvas { position: absolute; inset: 0; height: 100%; }
+.stage.editing canvas { cursor: crosshair; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select, input { background: var(--raise); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; }
+input[type=number] { width: 4.5em; }
+button { cursor: pointer; }
+button.primary { background: #2f5d46; border-color: #3f7a5c; font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+label { color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.status { font: 600 18px var(--cond); }
+.status.rec { color: var(--rec); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+.rec .dot { background: var(--rec); }
+.watching .dot { background: var(--ok); }
+.muted { color: var(--muted); font-size: 13px; }
+.err { color: var(--rec); }
+ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+li { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Board recorder</h1>
+
+  <div class="stage" id="stage">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="panel">
+    <div class="status" id="status"><span class="dot"></span><span id="statusText">Starting camera…</span></div>
+    <div class="muted" id="detail"></div>
+    <div class="row">
+      <select id="camera" aria-label="Camera"></select>
+      <button id="mark">Mark board</button>
+      <button id="clear">Clear</button>
+      <button id="toggle" class="primary" disabled>Start watching</button>
+    </div>
+    <div class="row">
+      <label>Stop after <input id="post" type="number" min="1" max="60" value="5"> s clear</label>
+      <label>Ignore under <input id="minOn" type="number" min="0" max="30" step="0.5" value="2"> s on board</label>
+      <label>Checks/s <input id="rate" type="number" min="1" max="15" value="5"></label>
+    </div>
+    <div class="muted">
+      Click or tap the board's corners in the picture, then Start watching. A clip starts the moment a wrist or foot
+      is on the board and uploads to the server when it ends. Keep this tab open and in front, and the device awake
+      (iOS stops the camera if the screen locks or the tab is backgrounded).
+    </div>
+  </div>
+
+  <div class="panel" id="pendingPanel" hidden>
+    <div class="status">Waiting to upload</div>
+    <ul id="pending"></ul>
+  </div>
+</main>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const CONTACT = [15, 16, 27, 28, 31, 32];     // wrists and feet (MediaPipe pose indices)
+const MAX_CLIP_MS = 40 * 1000;                // one attempt per clip; a longer effort continues in the next clip
+const BITRATE = 2_500_000;
+const MIMES = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+
+const $ = id => document.getElementById(id);
+const video = $("video"), canvas = $("overlay"), ctx = canvas.getContext("2d");
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem("rec." + k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("rec." + k, JSON.stringify(v)); } catch {} },
+};
+
+let region = store.get("region", []);   // [[x, y], ...] as 0-1 fractions of the frame
+let editing = false, watching = false, landmarker = null, stream = null, wakeLock = null;
+let rec = null, lastOn = 0, timer = null, saved = 0;
+const pending = [];
+
+for (const id of ["post", "minOn", "rate"]) {
+  $(id).value = store.get(id, $(id).value);
+  $(id).addEventListener("change", () => { store.set(id, +$(id).value); if (id === "rate" && watching) schedule(); });
+}
+
+function setStatus(text, cls = "") {
+  $("status").className = "status " + cls;
+  $("statusText").textContent = text;
+}
+const detail = (t, err) => { $("detail").textContent = t || ""; $("detail").className = "muted" + (err ? " err" : ""); };
+
+// ---- camera -------------------------------------------------------------
+async function listCameras() {
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+  const want = store.get("camera", "");
+  $("camera").innerHTML = cams.map((c, i) => `<option value="${c.deviceId}">${c.label || "Camera " + (i + 1)}</option>`).join("");
+  if (cams.some(c => c.deviceId === want)) $("camera").value = want;
+}
+
+async function startCamera() {
+  stream?.getTracks().forEach(t => t.stop());
+  const id = $("camera").value || store.get("camera", "");
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { ...(id ? { deviceId: { exact: id } } : {}), width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false,
+    });
+  } catch (e) {
+    setStatus("No camera", ""); detail("Camera error: " + e.message + " (camera access needs HTTPS or localhost)", true);
+    return;
+  }
+  const track = stream.getVideoTracks()[0];
+  track.onended = () => {                       // unplugged / phone went to sleep: close the clip, then retry
+    detail("Camera lost, retrying…", true);
+    stopRecording();
+    setTimeout(startCamera, 5000);
+  };
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  await listCameras();
+  $("camera").value = track.getSettings().deviceId || $("camera").value;
+  store.set("camera", $("camera").value);
+  $("toggle").disabled = !landmarker;
+  detail("");
+  if (!watching) setStatus("Ready");
+}
+$("camera").addEventListener("change", startCamera);
+video.addEventListener("loadedmetadata", () => { canvas.width = video.videoWidth; canvas.height = video.videoHeight; draw(); });
+
+// ---- board region -------------------------------------------------------
+$("mark").onclick = () => {
+  editing = !editing;
+  if (editing) region = [];
+  $("stage").classList.toggle("editing", editing);
+  $("mark").textContent = editing ? "Done" : "Mark board";
+  if (!editing) store.set("region", region);
+  draw();
+};
+$("clear").onclick = () => { region = []; store.set("region", region); draw(); };
+canvas.addEventListener("pointerdown", e => {
+  if (!editing) return;
+  const r = canvas.getBoundingClientRect();
+  region.push([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]);
+  if (region.length === 4) $("mark").click();
+  else draw();
+});
+
+function draw() {
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!region.length) return;
+  ctx.lineWidth = Math.max(2, w / 300);
+  ctx.strokeStyle = rec ? "#ff6b6b" : "#7fd1a0";
+  ctx.beginPath();
+  region.forEach(([x, y], i) => (i ? ctx.lineTo(x * w, y * h) : ctx.moveTo(x * w, y * h)));
+  if (region.length > 2 && !editing) ctx.closePath();
+  ctx.stroke();
+  for (const [x, y] of region) { ctx.beginPath(); ctx.arc(x * w, y * h, ctx.lineWidth * 2, 0, 7); ctx.fillStyle = ctx.strokeStyle; ctx.fill(); }
+}
+
+function inside(x, y) {                         // ray casting point-in-polygon
+  let c = false;
+  for (let i = 0, j = region.length - 1; i < region.length; j = i++) {
+    const [xi, yi] = region[i], [xj, yj] = region[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+
+// ---- detection + recording ---------------------------------------------
+async function loadModel() {
+  setStatus("Loading pose model…");
+  const files = await FilesetResolver.forVisionTasks(WASM);
+  for (const delegate of ["GPU", "CPU"]) {
+    try {
+      landmarker = await PoseLandmarker.createFromOptions(files, {
+        baseOptions: { modelAssetPath: MODEL, delegate }, runningMode: "VIDEO", numPoses: 3,
+      });
+      return;
+    } catch (e) { if (delegate === "CPU") throw e; }
+  }
+}
+
+function personOnBoard() {
+  if (region.length < 3 || video.readyState < 2) return false;
+  const { landmarks } = landmarker.detectForVideo(video, performance.now());
+  return landmarks.some(pose => CONTACT.some(i => pose[i].visibility > 0.5 && inside(pose[i].x, pose[i].y)));
+}
+
+function tick() {
+  const now = performance.now();
+  let on = false;
+  try { on = personOnBoard(); } catch (e) { detail("Detection error: " + e.message, true); }
+  if (on) lastOn = now;
+  if (!rec && on) startRecording(now);
+  if (rec) {
+    if (on) rec.onTime += now - rec.lastTick;
+    rec.lastTick = now;
+    const secs = ((now - rec.start) / 1000) | 0;
+    setStatus(`Recording ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`, "rec");
+    if (now - lastOn > $("post").value * 1000 || now - rec.start > MAX_CLIP_MS) stopRecording();
+  }
+}
+function schedule() { clearInterval(timer); timer = setInterval(tick, 1000 / Math.max(1, +$("rate").value)); }
+
+function startRecording(now) {
+  const mime = MIMES.find(m => MediaRecorder.isTypeSupported(m));
+  if (!mime) { detail("This browser can't record video.", true); return; }
+  const mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: BITRATE });
+  const chunks = [];
+  rec = { mr, mime, chunks, start: now, lastTick: now, onTime: 0 };
+  mr.ondataavailable = e => e.data.size && chunks.push(e.data);   // final chunk arrives after rec is cleared
+  mr.start(1000);
+  draw();
+}
+
+function stopRecording() {
+  if (!rec) return;
+  const { mr, mime, chunks, onTime } = rec;
+  rec = null;
+  mr.addEventListener("stop", () => {
+    if (onTime < $("minOn").value * 1000) { detail("Ignored a short pass-by."); return; }
+    enqueue(new Blob(chunks, { type: mime }));
+  });
+  if (mr.state !== "inactive") mr.stop();
+  if (watching) setStatus("Watching", "watching");
+  draw();
+}
+
+// ---- upload -------------------------------------------------------------
+function enqueue(blob) {
+  const item = { blob, tries: 0, state: "uploading" };
+  pending.push(item);
+  render();
+  upload(item);
+}
+
+async function upload(item) {
+  item.state = "uploading"; render();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch("/upload", { method: "POST", headers: { "Content-Type": item.blob.type.split(";")[0] }, body: item.blob });
+      if (r.ok) {
+        pending.splice(pending.indexOf(item), 1);
+        saved++; detail(`Saved ${saved} clip${saved > 1 ? "s" : ""} to the server.`); render();
+        return;
+      }
+      item.error = `server said ${r.status}`;
+      if (r.status < 500) break;                // 4xx won't get better by retrying
+    } catch (e) { item.error = e.message; }
+    await new Promise(res => setTimeout(res, 2000 * 3 ** attempt));
+  }
+  item.state = "failed"; detail("Upload failed: " + item.error, true); render();
+}
+
+function render() {
+  $("pendingPanel").hidden = !pending.length;
+  $("pending").innerHTML = "";
+  for (const item of pending) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span>${(item.blob.size / 1e6).toFixed(1)} MB · ${item.state}${item.error && item.state === "failed" ? " (" + item.error + ")" : ""}</span>`;
+    if (item.state === "failed") {
+      const retry = Object.assign(document.createElement("button"), { textContent: "Retry", onclick: () => upload(item) });
+      const drop = Object.assign(document.createElement("button"), { textContent: "Discard", onclick: () => { pending.splice(pending.indexOf(item), 1); render(); } });
+      li.append(retry, drop);
+    }
+    $("pending").append(li);
+  }
+}
+addEventListener("beforeunload", e => { if (pending.length || rec) e.preventDefault(); });
+
+// ---- start / stop watching ---------------------------------------------
+async function keepAwake() {
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
+}
+document.addEventListener("visibilitychange", () => { if (watching && document.visibilityState === "visible") keepAwake(); });
+
+$("toggle").onclick = () => {
+  watching = !watching;
+  $("toggle").textContent = watching ? "Stop watching" : "Start watching";
+  $("toggle").classList.toggle("primary", !watching);
+  if (watching) {
+    if (region.length < 3) { watching = false; $("toggle").textContent = "Start watching"; $("toggle").classList.add("primary"); detail("Mark the board first.", true); return; }
+    keepAwake(); schedule(); setStatus("Watching", "watching");
+  } else {
+    clearInterval(timer); stopRecording(); wakeLock?.release?.(); setStatus("Ready");
+  }
+};
+
+try { await loadModel(); } catch (e) { detail("Couldn't load the pose model: " + e.message, true); }
+await startCamera();
+</script>
+</body>
+</html>
