@@ -5,7 +5,7 @@ webapp/search.py's /upload fills, and for every finished clip:
   1. (webm/mov only) re-encode to mp4 at a fixed frame rate, so frame timing is reliable
   2. calibrate the camera automatically against a hand-made calibration
   3. find the lit holds and match them against the climb database
-  4. move the clip and a small result file to data/climbs/<climb>/ (or _unidentified/)
+  4. move the clip and a small result file to data/climbs/<climb>/ (or _unidentified/); climbs/ is a mount of the NAS pool
 
 Only light work happens here. Movement analysis, pose tracking and overlays are
 done on request from the PC with video/analyse_movement.py.

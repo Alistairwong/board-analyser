@@ -77,6 +77,11 @@ li { display: flex; gap: 8px; align-items: center; justify-content: space-betwee
     </div>
   </div>
 
+  <div class="panel" id="donePanel" hidden>
+    <div class="status">Uploaded this session</div>
+    <ul id="done"></ul>
+  </div>
+
   <div class="panel" id="pendingPanel" hidden>
     <div class="status">Waiting to upload</div>
     <ul id="pending"></ul>
@@ -104,6 +109,7 @@ let region = store.get("region", []);   // [[x, y], ...] as 0-1 fractions of the
 let editing = false, watching = false, landmarker = null, stream = null, wakeLock = null;
 let rec = null, lastOn = 0, timer = null, saved = 0;
 const pending = [];
+const uploaded = (() => { try { return JSON.parse(sessionStorage.getItem("uploaded") || "[]"); } catch { return []; } })();
 
 for (const id of ["post", "minOn", "rate"]) {
   $(id).value = store.get(id, $(id).value);
@@ -242,11 +248,11 @@ function startRecording(now) {
 
 function stopRecording() {
   if (!rec) return;
-  const { mr, mime, chunks, onTime } = rec;
+  const { mr, mime, chunks, onTime, start, lastTick } = rec;
   rec = null;
   mr.addEventListener("stop", () => {
     if (onTime < $("minOn").value * 1000) { detail("Ignored a short pass-by."); return; }
-    enqueue(new Blob(chunks, { type: mime }));
+    enqueue(new Blob(chunks, { type: mime }), "Live recording", (lastTick - start) / 1000);
   });
   if (mr.state !== "inactive") mr.stop();
   if (watching) setStatus("Watching", "watching");
@@ -254,12 +260,26 @@ function stopRecording() {
 }
 
 // ---- upload -------------------------------------------------------------
-$("files").onchange = e => { for (const f of e.target.files) enqueue(f); e.target.value = ""; };
+$("files").onchange = e => { for (const f of e.target.files) enqueue(f, f.name); e.target.value = ""; };
 
-function enqueue(blob) {
-  const item = { blob, tries: 0, state: "uploading" };
+// A file's length comes from the browser's own decoder; null if it can't read the format.
+function clipLength(file) {
+  return new Promise(res => {
+    const v = document.createElement("video"), url = URL.createObjectURL(file);
+    const finish = secs => { URL.revokeObjectURL(url); res(secs); };
+    v.preload = "metadata";
+    v.onloadedmetadata = () => finish(isFinite(v.duration) ? v.duration : null);
+    v.onerror = () => finish(null);
+    v.src = url;
+  });
+}
+const fmtLen = s => s == null ? "length unknown" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+
+function enqueue(blob, label, secs = null) {
+  const item = { blob, label, secs, tries: 0, state: "uploading" };
   pending.push(item);
   render();
+  if (secs == null && blob instanceof File) item.length = clipLength(blob).then(v => item.secs = v);
   upload(item);
 }
 
@@ -269,6 +289,9 @@ async function upload(item) {
     try {
       const r = await fetch("/upload", { method: "POST", headers: { "Content-Type": item.blob.type.split(";")[0] }, body: item.blob });
       if (r.ok) {
+        await item.length;                      // its length may still be loading
+        const { name } = await r.json();
+        addDone({ label: item.label, name, secs: item.secs, size: item.blob.size, at: new Date().toLocaleTimeString() });
         pending.splice(pending.indexOf(item), 1);
         saved++; detail(`Saved ${saved} clip${saved > 1 ? "s" : ""} to the server.`); render();
         return;
@@ -281,7 +304,22 @@ async function upload(item) {
   item.state = "failed"; detail("Upload failed: " + item.error, true); render();
 }
 
+function addDone(d) {
+  uploaded.push(d);
+  try { sessionStorage.setItem("uploaded", JSON.stringify(uploaded)); } catch {}
+}
+function renderDone() {
+  $("donePanel").hidden = !uploaded.length;
+  $("done").innerHTML = "";
+  for (const d of uploaded.slice().reverse()) {
+    const li = document.createElement("li");
+    li.textContent = `${d.label} · ${fmtLen(d.secs)} · ${(d.size / 1e6).toFixed(1)} MB · saved as ${d.name} at ${d.at}`;
+    $("done").append(li);
+  }
+}
+
 function render() {
+  renderDone();
   $("pendingPanel").hidden = !pending.length;
   $("pending").innerHTML = "";
   for (const item of pending) {

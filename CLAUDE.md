@@ -109,6 +109,17 @@ outside Docker.
   against the climb DB (reusing `video/`'s code) and files each clip under `data/climbs/<climb>/` (or
   `_unidentified/`, `_failed/`). Light work only; pose/movement analysis stays on request via `video/`.
   Needs a hand-made calibration in `data/calibrations/` for auto-calibration to work.
+- `recogniser/` (Docker, `cd recogniser && docker compose up -d --build`, host port 8020): web app for
+  one-off recognition. Upload a photo or video; it auto-aligns to a hand-made reference calibration
+  (`autocalibrate.py`), finds the lit holds, matches the climb (reusing `video/`'s code, copied in by the
+  Dockerfile) and returns the photo (for a video, a climber-free "clean plate": the per-pixel median of 15 frames, so it assumes a fixed camera) with the climb's holds circled by role plus name, grade, setter, stars,
+  match verdict and a per-hold "confidence" (LED signal strength: 0% at the lit/unlit cut-off, 100% at 3x it;
+  not a probability). Its "Calibrate" tab makes the reference calibration in the browser (click the 4 corner
+  holes on a photo), so no desktop window is needed. Results go to `data/recogniser/`. `test_recognise.py`
+  is a synthetic end-to-end check (see its docstring). Untested on real footage.
+  Also reachable as `/recogniser/` on the main site (`search.py` proxies it to the container via `RECOGNISER_URL`,
+  default `http://host.docker.internal:8020`), so it sits behind the same Cloudflare Access login. The page uses
+  relative URLs so it works at both addresses. Through the tunnel, uploads over ~100 MB (long videos) will fail.
 - `search/sw.js` + `manifest.webmanifest` + icons: referenced by `index.html` for an installable PWA with
   offline cache, but **these files don't actually exist yet** -- the feature is currently broken (silent,
   since the service-worker registration swallows the failure). Still outstanding.

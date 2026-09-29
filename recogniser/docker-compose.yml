@@ -1,0 +1,12 @@
+services:
+  recogniser:
+    build:
+      context: ..                    # repo root, so it can copy video/'s recognition code
+      dockerfile: recogniser/Dockerfile
+    container_name: climb-recogniser
+    restart: unless-stopped
+    mem_limit: 2g
+    ports:
+      - "8020:8000"                  # http://nas-server:8020 on your network
+    volumes:
+      - ../data:/data                # tension.db and calibrations/ in; recogniser/ (result photos) out

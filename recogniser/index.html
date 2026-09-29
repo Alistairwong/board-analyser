@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Climb recogniser</title>
+<meta name="theme-color" content="#1b1f22">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #1b1f22; --panel: #242a2e; --raise: #2e353a; --line: #3a4247;
+  --text: #e8ebeb; --muted: #9aa4a8; --focus: #8fb8ff; --ok: #7fd1a0; --warn: #e6c46b; --bad: #ff6b6b;
+  --start: #00dd00; --middle: #0066ff; --finish: #ff0000; --foot: #ff00ff;
+  --cond: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--body); }
+body { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+main { max-width: 900px; margin: 0 auto; padding: 12px; display: grid; gap: 12px; }
+h1 { font: 600 20px var(--cond); margin: 0; letter-spacing: .02em; }
+h2 { font: 600 18px var(--cond); margin: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, input, label.btn { background: var(--raise); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+input[type=text] { cursor: text; width: 10em; }
+button.primary, label.primary { background: #2f5d46; border-color: #3f7a5c; font-weight: 600; }
+button[aria-selected=true] { border-color: var(--focus); }
+button:disabled { opacity: .5; cursor: default; }
+.muted { color: var(--muted); font-size: 13px; }
+.err { color: var(--bad); }
+img.result, canvas { display: block; width: 100%; height: auto; border-radius: 8px; background: #000; }
+canvas { cursor: crosshair; }
+.bar { height: 8px; background: var(--raise); border-radius: 4px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--ok); }
+.grade { font: 700 30px var(--cond); }
+.stats { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.pill { font: 600 12px var(--cond); text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); }
+.confident, .likely, .tied { color: var(--ok); } .uncertain, .nomatch { color: var(--warn); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Climb recogniser</h1>
+  <div class="row" role="tablist">
+    <button id="tabRec" role="tab" aria-selected="true">Recognise</button>
+    <button id="tabCal" role="tab" aria-selected="false">Calibrate</button>
+  </div>
+
+  <section id="recView" class="panel">
+    <div class="row">
+      <label class="btn primary">Choose photo or video <input id="file" type="file" accept="image/*,video/mp4,video/quicktime,video/webm,.mov" hidden></label>
+      <span class="muted" id="fname"></span>
+    </div>
+    <div class="muted">Any angle works, as long as the whole board is in view and the LEDs are lit. It's lined up with your reference calibration automatically.</div>
+    <div id="progress" hidden><div id="step" class="muted"></div><div class="bar"><i id="fill" style="width:0"></i></div></div>
+    <div id="error" class="err" hidden></div>
+  </section>
+
+  <section id="result" hidden class="panel">
+    <img id="out" class="result" alt="The board with the recognised climb's holds circled">
+    <div class="row"><a id="download" download="climb.jpg" class="muted">Download photo</a></div>
+    <h2 id="cname"></h2>
+    <div class="stats" id="stats"></div>
+    <div class="muted" id="conf"></div>
+    <div class="muted" id="desc"></div>
+    <table id="holds"><thead><tr><th>Hold</th><th>Role</th><th>Seen</th><th style="width:40%">Confidence</th></tr></thead><tbody></tbody></table>
+    <div class="muted" id="extra"></div>
+    <details><summary class="muted">Other candidates</summary><table id="cands"></table></details>
+    <div class="muted">Confidence is how clearly that hold's LED shows against the unlit holds (0% at the cut-off, 100% at three times it). It isn't a probability. Holds from the database that weren't visible in the photo show 0%.</div>
+  </section>
+
+  <section id="calView" class="panel" hidden>
+    <div class="muted">Do this once. Upload a clear, straight-on photo of the whole board, then click the four corner holds in order. Every later photo or video is matched against it, so it can be from any angle.</div>
+    <div class="row">
+      <label class="btn primary">Choose reference photo <input id="calFile" type="file" accept="image/*" hidden></label>
+      <label>Name <input id="calName" type="text" value="ref1" maxlength="30"></label>
+      <button id="undo" disabled>Undo click</button>
+      <button id="save" class="primary" disabled>Save calibration</button>
+    </div>
+    <div id="prompt" class="muted"></div>
+    <canvas id="cv" hidden></canvas>
+    <div id="calMsg"></div>
+    <img id="calCheck" class="result" alt="Calibration check" hidden>
+    <div id="existing" class="muted"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmtPct = x => Math.round(x * 100) + "%";
+const ROLE = { start: "var(--start)", middle: "var(--middle)", finish: "var(--finish)", foot: "var(--foot)" };
+
+// ---- tabs ----
+function tab(cal) {
+  $("tabRec").setAttribute("aria-selected", !cal); $("tabCal").setAttribute("aria-selected", cal);
+  $("recView").hidden = cal; $("calView").hidden = !cal; if (cal) $("result").hidden = true;
+  if (cal) loadExisting();
+}
+$("tabRec").onclick = () => tab(false); $("tabCal").onclick = () => tab(true);
+
+// ---- recognise ----
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $("fname").textContent = f.name; $("error").hidden = true; $("result").hidden = true;
+  show("Uploading", 0);
+  const type = f.type || (/\.mov$/i.test(f.name) ? "video/quicktime" : "");
+  let r;
+  try { r = await fetch("api/recognise", { method: "POST", headers: { "Content-Type": type }, body: f }); }
+  catch (err) { return fail("Upload failed: " + err.message); }
+  const j = await r.json();
+  if (!r.ok) return fail(j.error || `Server said ${r.status}`);
+  poll(j.job);
+  e.target.value = "";
+};
+function show(step, p) { $("progress").hidden = false; $("step").textContent = step; $("fill").style.width = Math.round(p * 100) + "%"; }
+function fail(msg) { $("progress").hidden = true; $("error").hidden = false; $("error").textContent = msg; }
+async function poll(id) {
+  for (;;) {
+    let j;
+    try { j = await (await fetch("api/job/" + id)).json(); } catch { await new Promise(r => setTimeout(r, 2000)); continue; }
+    if (j.status === "error") return fail(j.error);
+    if (j.status === "done") { $("progress").hidden = true; return render(j.result); }
+    show(j.step, j.progress || 0);
+    await new Promise(r => setTimeout(r, 800));
+  }
+}
+function render(r) {
+  $("result").hidden = false;
+  $("out").src = r.image; $("download").href = r.image;
+  const c = r.climb;
+  $("cname").textContent = c ? c.name : "No climb recognised";
+  const stats = $("stats"); stats.innerHTML = "";
+  const add = (html) => { const s = document.createElement("span"); s.innerHTML = html; stats.append(s); };
+  if (c) {
+    add(`<span class="grade">${c.grade_v || "?"}</span> <span class="muted">${c.grade_font || ""}</span>`);
+    add(`Setter <b>${esc(c.setter || "unknown")}</b>`);
+    add(`Stars <b>${c.stars ?? "–"}</b>`);
+    add(`Ascents <b>${c.ascents}</b>`);
+    add(`Angle <b>${c.angle}°</b>${c.benchmark ? ` <span class="pill">benchmark</span>` : ""}${c.mirrored ? ` <span class="pill">mirrored</span>` : ""}`);
+  }
+  const v = r.verdict.replace(" ", "");
+  $("conf").innerHTML = `<span class="pill ${v}">${r.verdict}</span> ${fmtPct(r.match)} of the lit holds match this climb` +
+    `${r.ties ? `, tied with ${r.ties} other${r.ties > 1 ? "s" : ""}` : ""}; ${fmtPct(r.margin)} ahead of the next best. ${r.detected} lit holds detected.`;
+  $("desc").textContent = c && c.description ? `“${c.description}”` : "";
+  const tb = $("holds").tBodies[0]; tb.innerHTML = "";
+  for (const h of r.holds) {
+    const tr = tb.insertRow();
+    tr.innerHTML = `<td>${h.x},${h.y}</td><td><span class="sw" style="background:${ROLE[h.role] || "#fff"}"></span>${h.role || "?"}</td>` +
+      `<td>${h.seen ? "yes" : "no"}</td><td><div class="bar"><i style="width:${fmtPct(h.confidence)}"></i></div>${fmtPct(h.confidence)}</td>`;
+  }
+  $("extra").textContent = r.not_in_climb.length ? `${r.not_in_climb.length} lit hold${r.not_in_climb.length > 1 ? "s" : ""} not part of this climb (thin white circles on the photo).` : "";
+  $("cands").innerHTML = r.candidates.map(k => `<tr><td>${esc(k.name)}${k.mirrored ? " (mirrored)" : ""}</td><td>${k.grade || "–"}</td><td>${fmtPct(k.match)}</td></tr>`).join("");
+  $("result").scrollIntoView({ behavior: "smooth" });
+}
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+// ---- calibrate ----
+let calImg = null, calBlob = null, clicks = [], corners = [];
+async function loadExisting() {
+  const [c, cal] = await Promise.all([fetch("api/corners").then(r => r.json()), fetch("api/calibrations").then(r => r.json())]);
+  corners = c;
+  $("existing").textContent = cal.length ? "Saved calibrations: " + cal.map(x => x.name).join(", ") + ". Saving with the same name replaces it." : "No calibration saved yet.";
+  prompt();
+}
+function prompt() {
+  $("prompt").textContent = !calImg ? "" : clicks.length < 4 ? `Click ${clicks.length + 1}/4: the ${corners[clicks.length]?.label} (hole ${corners[clicks.length]?.hole})` : "All four set. Check the dots, then save.";
+  $("undo").disabled = !clicks.length; $("save").disabled = clicks.length !== 4;
+}
+function draw() {
+  const cv = $("cv"), g = cv.getContext("2d");
+  g.drawImage(calImg, 0, 0);
+  const r = Math.max(6, cv.width / 160);
+  clicks.forEach(([x, y], i) => {
+    g.fillStyle = "#ff3b3b"; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    g.fillStyle = "#fff"; g.font = `${r * 3}px sans-serif`; g.fillText(i + 1, x + r * 1.5, y - r);
+  });
+}
+$("calFile").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  calBlob = f; clicks = []; $("calCheck").hidden = true; $("calMsg").textContent = "";
+  const img = new Image();
+  img.onload = () => { calImg = img; const cv = $("cv"); cv.width = img.naturalWidth; cv.height = img.naturalHeight; cv.hidden = false; draw(); prompt(); };
+  img.src = URL.createObjectURL(f);
+};
+$("cv").onclick = e => {
+  if (clicks.length >= 4) return;
+  const cv = $("cv"), b = cv.getBoundingClientRect();
+  clicks.push([(e.clientX - b.left) * cv.width / b.width, (e.clientY - b.top) * cv.height / b.height]);
+  draw(); prompt();
+};
+$("undo").onclick = () => { clicks.pop(); draw(); prompt(); };
+$("save").onclick = async () => {
+  $("save").disabled = true; $("calMsg").textContent = "Saving…"; $("calMsg").className = "muted";
+  const pts = clicks.map(p => p.map(v => v.toFixed(1)).join(",")).join(",");
+  const r = await fetch(`api/calibrate?name=${encodeURIComponent($("calName").value)}&pts=${pts}`, { method: "POST", headers: { "Content-Type": calBlob.type || "image/jpeg" }, body: calBlob });
+  const j = await r.json();
+  if (!r.ok) { $("calMsg").className = "err"; $("calMsg").textContent = j.error; $("save").disabled = false; return; }
+  $("calMsg").className = "muted"; $("calMsg").textContent = "Saved. The yellow circles should sit on every hole; if not, redo it.";
+  $("calCheck").src = j.check + "?t=" + Date.now(); $("calCheck").hidden = false; loadExisting();
+};
+</script>
+</body>
+</html>

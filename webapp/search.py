@@ -14,6 +14,7 @@ changes, even while the server is running. Press Ctrl+C to stop the server.
 """
 import argparse
 import gzip
+import http.client
 import http.server
 import json
 import os
@@ -23,6 +24,7 @@ import threading
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
 
@@ -35,6 +37,8 @@ RECORDINGS = DATA_DIR / "recordings"
 UPLOAD_TYPES = {"video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov"}
 MAX_UPLOAD = 200 * 1024 * 1024
 STATIC = HERE / "search"
+# The photo/video recogniser is a separate container (it needs OpenCV); /recogniser/* is passed through to it.
+RECOGNISER = urlparse(os.environ.get("RECOGNISER_URL", "http://host.docker.internal:8020"))
 LOAD_CLIMBS = HERE / "load_climbs.py"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".json": "application/json",
                 ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
@@ -113,7 +117,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return f, STATIC_TYPES[f.suffix]
         return None
 
+    def proxy(self):
+        """Pass /recogniser/... through to the recogniser container, streaming both directions."""
+        path = self.path[len("/recogniser"):]
+        if not path:
+            self.send_response(301)
+            self.send_header("Location", "/recogniser/")
+            self.send_header("Content-Length", "0")
+            return self.end_headers()
+        if path[0] not in "/?":
+            return self.send_error(404)
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            conn = http.client.HTTPConnection(RECOGNISER.hostname, RECOGNISER.port, timeout=600)
+            conn.putrequest(self.command, path if path[0] == "/" else "/" + path)
+            if self.headers.get("Content-Type"):
+                conn.putheader("Content-Type", self.headers["Content-Type"])
+            conn.putheader("Content-Length", str(length))
+            conn.endheaders()
+            left = length
+            while left:
+                chunk = self.rfile.read(min(1 << 20, left))
+                if not chunk:
+                    break
+                conn.send(chunk)
+                left -= len(chunk)
+            resp = conn.getresponse()
+        except OSError:
+            return self.send_error(502, "The recogniser isn't running")
+        self.send_response(resp.status)
+        for h in ("Content-Type", "Content-Length"):
+            if resp.getheader(h):
+                self.send_header(h, resp.getheader(h))
+        self.end_headers()
+        while chunk := resp.read(1 << 20):
+            self.wfile.write(chunk)
+        conn.close()
+
     def do_GET(self):
+        if self.path.startswith("/recogniser"):
+            return self.proxy()
         path = self.path.split("?")[0]
         if path == "/climbs.json":
             export_if_needed()        # picks up a database sync without a restart
@@ -135,6 +178,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Save an uploaded clip from /record into data/recordings/ (name is server-made)."""
+        if self.path.startswith("/recogniser"):
+            return self.proxy()
         if self.path.split("?")[0] != "/upload":
             return self.send_error(404)
         ext = UPLOAD_TYPES.get(self.headers.get("Content-Type", "").split(";")[0].strip().lower())

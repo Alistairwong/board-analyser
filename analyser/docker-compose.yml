@@ -8,3 +8,4 @@ services:
     mem_limit: 2g
     volumes:
       - ../data:/data                # recordings/ in, climbs/ out; also tension.db and calibrations/
+      - /nas-pool/board-analyser/climbs:/data/climbs   # sorted clips live on the pool; recordings/ (inbox) stays on the NVMe

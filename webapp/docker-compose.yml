@@ -3,6 +3,8 @@ services:
     build: .
     container_name: climb-search
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reaches the recogniser container on the host (port 8020)
     ports:
       - "8010:8000"          # http://nas-server:8010 on your network
     volumes:
