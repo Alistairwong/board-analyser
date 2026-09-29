@@ -101,7 +101,7 @@ outside Docker.
   the region starts a `MediaRecorder` clip *immediately* (no pre-roll: later MediaRecorder chunks can't be
   decoded on their own); it stops after N seconds clear, and clips with under `min-on` seconds on the board
   are discarded (walk-bys). Clips are capped at 40 s (one attempt each; a longer effort continues in the next clip).
-  Finished clips are `POST`ed to `/upload` (`search.py` `do_POST`: mp4/webm only, 200 MB cap, server-made
+  Finished clips are `POST`ed to `/upload` (`search.py` `do_POST`: mp4/webm/mov only, 200 MB cap, server-made
   filename) and saved in `data/recordings/`; failed uploads stay listed with a Retry button. One flat camera,
   so someone walking in front of the board also counts. iOS stops the camera if the screen locks or the tab
   is backgrounded, so keep the tab in front and the device awake (page uses the Wake Lock API).

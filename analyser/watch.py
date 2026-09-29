@@ -2,7 +2,7 @@
 
 Runs on the NAS (Docker, see docker-compose.yml). Watches data/recordings/, which
 webapp/search.py's /upload fills, and for every finished clip:
-  1. (webm only) re-encode to mp4 at a fixed frame rate, so frame timing is reliable
+  1. (webm/mov only) re-encode to mp4 at a fixed frame rate, so frame timing is reliable
   2. calibrate the camera automatically against a hand-made calibration
   3. find the lit holds and match them against the climb database
   4. move the clip and a small result file to data/climbs/<climb>/ (or _unidentified/)
@@ -29,7 +29,7 @@ from recognise import GOOD, assess
 
 INBOX = DATA_DIR / "recordings"
 OUT = DATA_DIR / "climbs"
-CLIP_TYPES = {".mp4", ".webm"}
+CLIP_TYPES = {".mp4", ".webm", ".mov"}
 POLL_SECONDS = 5
 
 
@@ -38,8 +38,8 @@ def slug(name):
 
 
 def normalise(clip):
-    """Browsers' webm has no reliable frame rate; re-encode to a constant-rate mp4."""
-    if clip.suffix != ".webm":
+    """Browser webm and phone mov have unreliable frame rates; re-encode to a constant-rate mp4."""
+    if clip.suffix == ".mp4":
         return clip
     mp4 = clip.with_suffix(".mp4")
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(clip), "-r", "30", "-an",

@@ -32,7 +32,7 @@ from export_search import DB_PATH, OUT, export
 PAGE = HERE / "search" / "index.html"
 RECORD_PAGE = HERE / "search" / "record.html"
 RECORDINGS = DATA_DIR / "recordings"
-UPLOAD_TYPES = {"video/mp4": "mp4", "video/webm": "webm"}
+UPLOAD_TYPES = {"video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov"}
 MAX_UPLOAD = 200 * 1024 * 1024
 STATIC = HERE / "search"
 LOAD_CLIMBS = HERE / "load_climbs.py"
