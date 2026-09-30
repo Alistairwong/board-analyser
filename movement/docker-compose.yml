@@ -1,0 +1,12 @@
+services:
+  movement:
+    build:
+      context: ..                    # repo root, so it can copy video/'s code
+      dockerfile: movement/Dockerfile
+    container_name: climb-movement
+    restart: unless-stopped
+    mem_limit: 3g
+    ports:
+      - "8030:8000"
+    volumes:
+      - ../data:/data                # tension.db and calibrations/ in; movement/ (results) out

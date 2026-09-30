@@ -8,3 +8,7 @@
 !video/recognise.py
 !recogniser/server.py
 !recogniser/index.html
+!video/pose.py
+!video/movement.py
+!recogniser/verify.py
+!recogniser/empty.py

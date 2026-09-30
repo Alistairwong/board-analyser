@@ -37,7 +37,21 @@ LANDMARKS = {
     "left_foot": 31, "right_foot": 32,
     "left_hip": 23, "right_hip": 24,
     "left_shoulder": 11, "right_shoulder": 12,
+    "left_elbow": 13, "right_elbow": 14,
+    "left_knee": 25, "right_knee": 26,
+    # hand points, only used to place the hand (see hand_centre)
+    "left_pinky": 17, "right_pinky": 18, "left_index": 19, "right_index": 20,
 }
+
+
+def hand_centre(landmarks, side):
+    """The middle of the hand (between the index and pinky knuckles) if both are visible, else None.
+    The wrist sits a few inches behind where the fingers actually grip, so this places the hand better.
+    ponytail: MediaPipe's pose model only guesses finger points and they get hidden when gripping; a dedicated
+    hand-landmark model on a crop around the wrist would be sharper but is slower and needs a second model."""
+    a, b = landmarks.get(f"{side}_index"), landmarks.get(f"{side}_pinky")
+    if a and b and min(a[2], b[2]) >= 0.5:
+        return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, min(a[2], b[2]))
 
 
 def ensure_model():
@@ -52,7 +66,7 @@ def ensure_model():
     return MODEL_PATH
 
 
-def estimate_landmarks(video, fps=10, progress=None):
+def estimate_landmarks(video, fps=10, progress=None, step_frames=None, max_side=None, keep_all=False):
     """Sample a video and return per-frame pixel landmarks.
 
     Returns a list of {"t": seconds, "landmarks": {name: (x, y, visibility)}}.
@@ -60,6 +74,13 @@ def estimate_landmarks(video, fps=10, progress=None):
     person at all for that frame; low-visibility landmarks are still included
     (to_board_inches filters those) so gaps are visible to movement.py rather
     than silently interpolated here.
+
+    step_frames: look at every Nth frame instead of `fps` samples a second.
+    max_side: shrink frames so their longest side is this many pixels before
+    pose estimation (MediaPipe resizes internally anyway; the landmarks still
+    come back in the original frame's pixels).
+    keep_all: also return every landmark, as frame["all"] = [(x, y, visibility) x 33]
+    (empty when no person is found), e.g. to tell whether anyone is in shot.
     """
     video = Path(video)
     ensure_model()
@@ -71,7 +92,7 @@ def estimate_landmarks(video, fps=10, progress=None):
     cap = cv2.VideoCapture(str(video))
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-    step = max(1, round(video_fps / fps))
+    step = step_frames or max(1, round(video_fps / fps))
 
     out = []
     with PoseLandmarker.create_from_options(options) as landmarker:
@@ -82,17 +103,29 @@ def estimate_landmarks(video, fps=10, progress=None):
                 if not ok:
                     break
                 t_ms = int(frame_idx / video_fps * 1000)
-                image = mp.Image(image_format=mp.ImageFormat.SRGB,
-                                  data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                result = landmarker.detect_for_video(image, t_ms)
                 h, w = frame.shape[:2]
-                landmarks = {}
+                small = frame
+                if max_side and max(h, w) > max_side:
+                    small = cv2.resize(frame, None, fx=max_side / max(h, w), fy=max_side / max(h, w),
+                                       interpolation=cv2.INTER_AREA)
+                image = mp.Image(image_format=mp.ImageFormat.SRGB,
+                                  data=cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+                result = landmarker.detect_for_video(image, t_ms)
+                landmarks, every = {}, []
                 if result.pose_landmarks:
                     pose = result.pose_landmarks[0]
                     for name, idx in LANDMARKS.items():
                         lm = pose[idx]
                         landmarks[name] = (lm.x * w, lm.y * h, lm.visibility)
-                out.append({"t": t_ms / 1000, "landmarks": landmarks})
+                    for side in ("left", "right"):
+                        if c := hand_centre(landmarks, side):
+                            landmarks[f"{side}_hand"] = c
+                    if keep_all:
+                        every = [(lm.x * w, lm.y * h, lm.visibility) for lm in pose]
+                entry = {"t": t_ms / 1000, "landmarks": landmarks}
+                if keep_all:
+                    entry["all"] = every
+                out.append(entry)
                 if progress and total_frames > 0:
                     progress(min(1.0, frame_idx / total_frames))
             frame_idx += 1

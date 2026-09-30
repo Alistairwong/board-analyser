@@ -38,6 +38,18 @@ canvas { cursor: crosshair; }
 .bar { height: 8px; background: var(--raise); border-radius: 4px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--ok); }
 .grade { font: 700 30px var(--cond); }
+.attempt { font: 600 20px var(--cond); }
+.verify { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.verify .head { font: 600 16px var(--cond); }
+.verify .head.confirmed { color: var(--ok); } .verify .head.double-check { color: var(--bad); } .verify .head.unconfirmed { color: var(--warn); }
+.verify .item { display: grid; grid-template-columns: 7.5em 1fr; gap: 8px; align-items: baseline; }
+.verify .agrees { color: var(--ok); } .verify .disagrees { color: var(--bad); } .verify .inconclusive { color: var(--warn); } .verify .notavailable { color: var(--muted); }
+.verify .name { font-weight: 500; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.thumbs figure { margin: 0; width: min(100%, 280px); }
+.thumbs img { width: 100%; height: auto; border-radius: 6px; display: block; }
+.attempt .why { font: 400 13px var(--body); color: var(--muted); display: block; }
+.topped { color: var(--ok); } .nottopped { color: var(--bad); } .untracked, .unknown { color: var(--warn); }
 .stats { display: flex; flex-wrap: wrap; gap: 6px 18px; }
 .pill { font: 600 12px var(--cond); text-transform: uppercase; letter-spacing: .05em; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); }
 .confident, .likely, .tied { color: var(--ok); } .uncertain, .nomatch { color: var(--warn); }
@@ -69,7 +81,10 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
   <section id="result" hidden class="panel">
     <img id="out" class="result" alt="The board with the recognised climb's holds circled">
     <div class="row"><a id="download" download="climb.jpg" class="muted">Download photo</a></div>
+    <div id="source" class="muted"></div>
     <h2 id="cname"></h2>
+    <div id="attempt" class="attempt"></div>
+    <div id="verify"></div>
     <div class="stats" id="stats"></div>
     <div class="muted" id="conf"></div>
     <div class="muted" id="desc"></div>
@@ -138,6 +153,7 @@ function render(r) {
   $("result").hidden = false;
   $("out").src = r.image; $("download").href = r.image;
   const c = r.climb;
+  $("source").textContent = r.source ? r.source.note : "";
   $("cname").textContent = c ? c.name : "No climb recognised";
   const stats = $("stats"); stats.innerHTML = "";
   const add = (html) => { const s = document.createElement("span"); s.innerHTML = html; stats.append(s); };
@@ -151,11 +167,24 @@ function render(r) {
   const v = r.verdict.replace(" ", "");
   $("conf").innerHTML = `<span class="pill ${v}">${r.verdict}</span> ${fmtPct(r.match)} of the lit holds match this climb` +
     `${r.ties ? `, tied with ${r.ties} other${r.ties > 1 ? "s" : ""}` : ""}; ${fmtPct(r.margin)} ahead of the next best. ${r.detected} lit holds detected.`;
+  const a = r.attempt, at = $("attempt");
+  at.className = "attempt " + (a ? a.outcome.replace(" ", "") : "");
+  const label = { topped: "✔ Topped", "not topped": "✘ Didn't reach the finish", untracked: "? Couldn't track the climber", unknown: "? Can't tell" };
+  at.innerHTML = !a ? `<span class="why">A photo can't show whether the climb was completed. Upload a video for that.</span>` :
+    `${label[a.outcome]}<span class="why">${esc(a.reason || (a.outcome === "topped" ? `A hand ended on a finish hold (${a.moves} moves, ${a.duration_s}s).` : "No hand ended on a finish hold. If the climber was hard to see, the tracker may have missed it."))}</span>`;
+  const vf = r.verification, box = $("verify");
+  box.className = vf ? "verify" : "";
+  const sure = ["confident", "likely", "tied"].includes(r.verdict) && (!vf || vf.level !== "double-check");   // only show the extra evidence pictures when not sure
+  box.innerHTML = !vf ? "" : `<div class="head ${vf.level}">Cross-check: ${esc(vf.text)}</div>` + vf.checks.map(k =>
+    `<div class="item"><span class="${k.status.replace(" ", "")}"><b>${k.status}</b></span><span><span class="name">${esc(k.name)}</span> <span class="pill">${esc(k.source)}</span><br><span class="muted">${esc(k.detail)}</span>` +
+      (k.images.length && !sure ? `<div class="thumbs">${k.images.map(i => `<figure><a href="${i.url}" target="_blank"><img src="${i.url}" alt="${esc(i.caption)}" loading="lazy"></a><figcaption class="muted">${esc(i.caption)}</figcaption></figure>`).join("")}</div>` : "") + `</span></div>`).join("");
   $("desc").textContent = c && c.description ? `“${c.description}”` : "";
   const tb = $("holds").tBodies[0]; tb.innerHTML = "";
   for (const h of r.holds) {
     const tr = tb.insertRow();
-    tr.innerHTML = `<td>${h.x},${h.y}</td><td><span class="sw" style="background:${ROLE[h.role] || "#fff"}"></span>${h.role || "?"}</td>` +
+    const note = h.role_source === "climb" ? `<span class="muted"> · colour unclear, role from the climb</span>`
+      : h.role_source === "conflict" ? `<span class="muted"> · colour looked like ${esc(h.colour_looked_like)}; the climb says ${esc(h.role)}</span>` : "";
+    tr.innerHTML = `<td>${h.x},${h.y}</td><td><span class="sw" style="background:${ROLE[h.role] || "#fff"}"></span>${h.role || "?"}${note}</td>` +
       `<td>${h.seen ? "yes" : "no"}</td><td><div class="bar"><i style="width:${fmtPct(h.confidence)}"></i></div>${fmtPct(h.confidence)}</td>`;
   }
   $("extra").textContent = r.not_in_climb.length ? `${r.not_in_climb.length} lit hold${r.not_in_climb.length > 1 ? "s" : ""} not part of this climb (thin white circles on the photo).` : "";

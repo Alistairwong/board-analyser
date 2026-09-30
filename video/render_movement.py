@@ -27,24 +27,32 @@ SKELETON_EDGES = [
     ("left_shoulder", "right_shoulder"),
     ("left_shoulder", "left_hip"), ("right_shoulder", "right_hip"),
     ("left_hip", "right_hip"),
-    ("left_shoulder", "left_wrist"), ("right_shoulder", "right_wrist"),
-    ("left_hip", "left_ankle"), ("right_hip", "right_ankle"),
+    ("left_shoulder", "left_elbow"), ("right_shoulder", "right_elbow"),
+    ("left_elbow", "left_wrist"), ("right_elbow", "right_wrist"),
+    ("left_wrist", "left_hand"), ("right_wrist", "right_hand"),
+    ("left_hip", "left_knee"), ("right_hip", "right_knee"),
+    ("left_knee", "left_ankle"), ("right_knee", "right_ankle"),
     ("left_ankle", "left_foot"), ("right_ankle", "right_foot"),
 ]
 LIMB_COLOUR = {   # BGR
+    "left_hand": (255, 80, 0), "right_hand": (0, 80, 255),
     "left_wrist": (255, 80, 0), "right_wrist": (0, 80, 255),
+    "left_elbow": (255, 150, 60), "right_elbow": (60, 150, 255),
+    "left_knee": (255, 230, 80), "right_knee": (80, 230, 255),
+    "left_shoulder": (255, 255, 255), "right_shoulder": (255, 255, 255),
+    "left_hip": (255, 255, 255), "right_hip": (255, 255, 255),
     "left_foot": (255, 200, 0), "right_foot": (0, 200, 255),
 }
 
 
-def render(video, calib_name=None, fps=10, verbose=True):
+def render(video, calib_name=None, fps=10, verbose=True, holds=None, frames=None):
     video = Path(video)
     say = print if verbose else (lambda *a, **k: None)
     calib_name = calib_name or video.stem
     calib = json.loads((CALIB_DIR / f"{calib_name}.json").read_text())
     H = np.array(calib["homography"], dtype=np.float64)
 
-    holds = resolved_holds(video, calib_name, verbose=verbose)
+    holds = holds or resolved_holds(video, calib_name, verbose=verbose)   # holds/frames: pass them in to skip the repeat work
     # This climb's holds, coloured by their role (same colours as the board's
     # own LEDs); everything else is just a small reference dot.
     bgr_by_role_name = {r["name"]: r["bgr"] for r in load_roles().values()}
@@ -57,7 +65,7 @@ def render(video, calib_name=None, fps=10, verbose=True):
     hole_pixels = {hid: project(H, [[x, y]])[0] for hid, name, x, y in all_holes}
 
     say(f"Estimating pose at {fps} fps...")
-    frames = estimate_landmarks(video, fps=fps)
+    frames = frames or estimate_landmarks(video, fps=fps)
     track = to_board_inches(H, frames)
     assignments = assign_holds(track, holds)
 
@@ -94,7 +102,7 @@ def render(video, calib_name=None, fps=10, verbose=True):
                         pb = (int(pix[b][0]), int(pix[b][1]))
                         cv2.line(frame, pa, pb, (255, 255, 255), 2)
                 for name, (x, y, vis) in pix.items():
-                    if vis < 0.5:
+                    if vis < 0.5 or name.endswith(("_pinky", "_index")):   # those only feed the hand centre
                         continue
                     cv2.circle(frame, (int(x), int(y)), 6, LIMB_COLOUR.get(name, (200, 200, 200)), -1)
 

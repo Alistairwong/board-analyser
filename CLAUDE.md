@@ -44,6 +44,25 @@ conflict, just don't overlap in what each actually needs).
 - `autocalibrate.py`: calibrate a new camera position automatically by SIFT-matching against a hand calibration
 - `detect_leds.py`: find lit holds (peak colourfulness minus patch median, 75th percentile over frames,
   robust threshold, LED hue bands so green wall paint is rejected)
+- **Role colours** (`detect_leds.assign_role`, `cap_finish`): a lit hold whose hue is nearly as close to a role of
+  another kind (hand / foot / finish) as to its best one (within `ROLE_MARGIN` = 10 hue units) is left **undefined**
+  (`role_name` None, `role_uncertain`, `role_guess`) instead of guessed. Climb search ignores undefined roles
+  (they neither help nor hurt the tie-break), and once the climb is matched the hold takes the climb's own role
+  (the recogniser tags each hold `role_source`: colour / climb / conflict). At most **2 finish holds** are kept
+  (checked against the database: 92% of climbs have 1, 7.5% have 2, none more); extras become undefined.
+  **Height rule** (`match_climb.finish_odds(y, other)`, measured from the database at import): finish holds are
+  98.9% in the upper half and 92% in the top 20%, but that alone doesn't separate them from hand holds; counting
+  finish per hand hold by height, finish only beats hand in the top tenth (y >= 130, about 4:1; 0.02 or less below
+  y = 100) and beats foot holds from y = 100 up. So an unclear finish-vs-hand/foot colour is settled by height when
+  the odds are lopsided (>= 3 finish, <= 0.2 other), else stays undefined; a clear colour is trusted at any height;
+  when more than 2 holds read as finish, low ones are dropped first.
+  **Order in the recogniser: lit or not -> climb by position -> roles.** Detection runs with `assign_roles=False`
+  (positions and hues only); `match()` compares positions alone; `match_climb.break_ties()` uses colours only to order
+  climbs that tie on position overlap (`colour_agreement`, ignoring unclear colours); only then does
+  `detect_leds.assign_lit_roles()` name roles (colour + height rules), used for holds no climb explains and to
+  flag colour/climb conflicts. Two finish holds must also be close together: `match_climb.finish_pair_limit()` is the
+  95th percentile of real two-finish pairs (about 46 in; median 16 in, so it only rejects far-apart pairs); `cap_finish`
+  drops a second finish farther than that. Detection defaults (`assign_roles=True`) are unchanged for the PC scripts and analyser.
 - `match_climb.py`: Jaccard match of detected holds against all climbs and their mirrors; adds grade (V/Font),
   ascents, stars at ANGLE. `full_climb_holds()` returns a matched climb's *complete* official hold list
   (by hole id, from the database) -- used once we're confident which climb it is, since LED detection alone
@@ -117,6 +136,33 @@ outside Docker.
   not a probability). Its "Calibrate" tab makes the reference calibration in the browser (click the 4 corner
   holes on a photo), so no desktop window is needed. Results go to `data/recogniser/`. `test_recognise.py`
   is a synthetic end-to-end check (see its docstring). Untested on real footage.
+  For videos it also says whether the climb was **topped**: after recognising the climb, MediaPipe pose
+  (`video/pose.py`, model downloaded to `data/models/` on first use) tracks the climber and
+  `movement.analyse()` reports "topped" if a hand ended on a finish hold; otherwise "not topped", or
+  "untracked" when no climber was found. Only judged when the climb was confidently recognised, and a miss
+  can be the tracker losing the climber. Photos can't be judged. Needs `mediapipe` (so opencv-contrib, not
+  headless) and `libegl1`/`libgles2` in the image; the container's memory cap is 3 GB.
+  **Empty-board frame** (`recogniser/empty.py`): for a video, one pose pass (every ~3rd frame, at most 600 scans,
+  frames shrunk to 640 px, `pose.estimate_landmarks(step_frames, max_side, keep_all)`) marks scans where nobody is
+  on the board: no landmark on/around the board outline (pose gate) AND nothing is in the way
+  (difference gate: the frame is warped into the calibration photo's view and compared with it, ignoring hole positions, using
+  local contrast, texture and brightness after allowing for a change in overall light; if that photo can't be compared with the
+  video, the video's own median picture is used instead). Runs of 3+ empty scans count; up to 7 frames are median-merged into the **empty-board image**,
+  which is re-aligned and used exactly like an uploaded photo for the lit-hole detection and as the output picture.
+  If nobody ever leaves the board (or the empty frame shows no lit holds, e.g. LEDs switched off) it falls back to the
+  whole-video detection and clean plate and says so (`result.source`). Live-recorded clips normally end with ~5 s of
+  empty board. The same pose pass feeds the body checks (thinned to ~5 samples/s).
+  **Cross-checks** (`recogniser/verify.py`, pure functions, tested with synthetic tracks): the result page lists
+  independent checks that the climb is right: (1) LED match verdict, (2) split-half: detection re-run on each half
+  of the video must pick the same climb (when an empty-board image was used this becomes "empty image and whole video agree") (`detect_leds.detect(span=...)`), (3) body on route: hands (on hand holds)
+  and feet (on any hold) sit on the recognised climb's holds at least as much as on the runner-up candidates',
+  (4) hands start on a start hold / end on a finish hold. Checks 1-2 come from the LEDs and 3-4 from body pose;
+  the overall line is "confirmed" only when both sources agree and nothing disagrees, else "unconfirmed" or
+  "double-check". Photos only get check 1. Every check shows the picture it used (`check.images`, files `data/recogniser/<id>-cN.jpg`): lit-hole
+  checks (1, 2) re-read their own picture from scratch (empty-board frame; median picture of the video, or of each half
+  in the fallback), body checks show the best frame (most hands/feet on the climb) and the start/finish frames with
+  the tracked hands/feet marked. Planned: logbook (`boardlib logbook`) and the gym's "recently
+  displayed" list as time-based checks (not built; the latter has no known API).
   Also reachable as `/recogniser/` on the main site (`search.py` proxies it to the container via `RECOGNISER_URL`,
   default `http://host.docker.internal:8020`), so it sits behind the same Cloudflare Access login. The page uses
   relative URLs so it works at both addresses. Through the tunnel, uploads over ~100 MB (long videos) will fail.

@@ -1,0 +1,12 @@
+*
+!video/config.py
+!video/calibrate.py
+!video/autocalibrate.py
+!video/detect_leds.py
+!video/match_climb.py
+!video/recognise.py
+!video/pose.py
+!video/movement.py
+!video/render_movement.py
+!movement/server.py
+!movement/index.html

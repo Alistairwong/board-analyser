@@ -39,6 +39,8 @@ MAX_UPLOAD = 200 * 1024 * 1024
 STATIC = HERE / "search"
 # The photo/video recogniser is a separate container (it needs OpenCV); /recogniser/* is passed through to it.
 RECOGNISER = urlparse(os.environ.get("RECOGNISER_URL", "http://host.docker.internal:8020"))
+MOVEMENT = urlparse(os.environ.get("MOVEMENT_URL", "http://host.docker.internal:8030"))   # /movement/* likewise
+PROXIES = {"/recogniser": RECOGNISER, "/movement": MOVEMENT}
 LOAD_CLIMBS = HERE / "load_climbs.py"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".json": "application/json",
                 ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
@@ -118,22 +120,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return None
 
     def proxy(self):
-        """Pass /recogniser/... through to the recogniser container, streaming both directions."""
-        path = self.path[len("/recogniser"):]
+        """Pass /recogniser/... or /movement/... through to that container, streaming both directions."""
+        prefix = next(p for p in PROXIES if self.path.startswith(p))
+        target = PROXIES[prefix]
+        path = self.path[len(prefix):]
         if not path:
             self.send_response(301)
-            self.send_header("Location", "/recogniser/")
+            self.send_header("Location", prefix + "/")
             self.send_header("Content-Length", "0")
             return self.end_headers()
         if path[0] not in "/?":
             return self.send_error(404)
         length = int(self.headers.get("Content-Length") or 0)
         try:
-            conn = http.client.HTTPConnection(RECOGNISER.hostname, RECOGNISER.port, timeout=600)
+            conn = http.client.HTTPConnection(target.hostname, target.port, timeout=600)
             conn.putrequest(self.command, path if path[0] == "/" else "/" + path)
             if self.headers.get("Content-Type"):
                 conn.putheader("Content-Type", self.headers["Content-Type"])
             conn.putheader("Content-Length", str(length))
+            if self.headers.get("Range"):
+                conn.putheader("Range", self.headers["Range"])
             conn.endheaders()
             left = length
             while left:
@@ -144,9 +150,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 left -= len(chunk)
             resp = conn.getresponse()
         except OSError:
-            return self.send_error(502, "The recogniser isn't running")
+            return self.send_error(502, f"The {prefix[1:]} app isn't running")
         self.send_response(resp.status)
-        for h in ("Content-Type", "Content-Length"):
+        for h in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
             if resp.getheader(h):
                 self.send_header(h, resp.getheader(h))
         self.end_headers()
@@ -155,7 +161,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         conn.close()
 
     def do_GET(self):
-        if self.path.startswith("/recogniser"):
+        if self.path.startswith(tuple(PROXIES)):
             return self.proxy()
         path = self.path.split("?")[0]
         if path == "/climbs.json":
@@ -178,7 +184,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Save an uploaded clip from /record into data/recordings/ (name is server-made)."""
-        if self.path.startswith("/recogniser"):
+        if self.path.startswith(tuple(PROXIES)):
             return self.proxy()
         if self.path.split("?")[0] != "/upload":
             return self.send_error(404)

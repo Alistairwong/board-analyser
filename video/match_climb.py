@@ -14,6 +14,7 @@ data/detections/<name>_match.json.
 """
 import argparse
 import json
+import math
 import sqlite3
 from pathlib import Path
 
@@ -22,6 +23,13 @@ from config import ANGLE, CLIMBS_PATH, DATA_DIR
 DB_PATH = DATA_DIR / "tension.db"
 DETECT_DIR = DATA_DIR / "detections"
 HAND_ROLES = {"start", "middle"}
+ROLE_MARGIN = 10          # hue units: a colour this close to a second kind of role is too unclear to name
+
+
+def hue_distance(a, b):
+    """Distance between two OpenCV hues (0-179), which wrap around at red."""
+    d = abs(a - b) % 180
+    return min(d, 180 - d)
 
 
 def role_class(name):
@@ -69,7 +77,8 @@ def score(climb_holds, detected):
     common = climb_holds.keys() & detected.keys()
     union = len(climb_holds) + len(detected) - len(common)
     jaccard = len(common) / union if union else 0.0
-    roles_ok = sum(climb_holds[p] == detected[p] for p in common)
+    # Roles only break ties. A hold whose colour was unclear ("?") is left out of it, neither for nor against.
+    roles_ok = sum(1 if climb_holds[p] == detected[p] else -1 for p in common if detected[p] != "?")
     return jaccard, len(common), roles_ok
 
 
@@ -110,6 +119,91 @@ def grade_text(r):
     bench = ", benchmark" if r.get("benchmark") else ""
     stars = f"{r['stars']} stars" if r.get("stars") is not None else "no rating"
     return f"{r['v']} / {r['font']}, {r['ascents']} ascents, {stars}{bench}"
+
+
+_HEIGHT_COUNTS = None
+BOARD_HEIGHT = 144        # inches, y runs 0..144
+HEIGHT_BINS = 10
+
+
+def finish_odds(y, other):
+    """How many finish holds there are per `other` hold ("hand" or "foot") at board height y, counted over every
+    climb in the database. It's about 0.02 or less up to 100 in (a finish there is very unlikely) and rises to
+    about 4 hand-holds' worth only in the top tenth (y >= 130); against foot holds finish wins from y = 100 up."""
+    global _HEIGHT_COUNTS
+    if _HEIGHT_COUNTS is None:
+        counts = [{"finish": 0, "hand": 0, "foot": 0} for _ in range(HEIGHT_BINS)]
+        data = json.loads(Path(CLIMBS_PATH).read_text())
+        roles = {int(k): v["name"] for k, v in data["roles"].items()}
+        for c in data["climbs"]:
+            for h in c["holds"]:
+                cls = role_class(roles.get(h["role"]))
+                if cls in counts[0]:
+                    counts[min(HEIGHT_BINS - 1, max(0, int(h["y"] / BOARD_HEIGHT * HEIGHT_BINS)))][cls] += 1
+        _HEIGHT_COUNTS = counts
+    c = _HEIGHT_COUNTS[min(HEIGHT_BINS - 1, max(0, int(y / BOARD_HEIGHT * HEIGHT_BINS)))]
+    return (c["finish"] + 1) / (c[other] + 1)
+
+
+_FINISH_PAIRS = None
+
+
+def finish_pair_limit(pct=0.95):
+    """How far apart (inches) the two finish holds of a climb can reasonably be: the `pct` point of the distances
+    in every two-finish climb in the database (about 46 in at 0.95; the median pair is 16 in apart, the board is 88 wide)."""
+    global _FINISH_PAIRS
+    if _FINISH_PAIRS is None:
+        data = json.loads(Path(CLIMBS_PATH).read_text())
+        roles = {int(k): v["name"] for k, v in data["roles"].items()}
+        dists = []
+        for c in data["climbs"]:
+            f = [h for h in c["holds"] if roles.get(h["role"]) == "finish"]
+            if len(f) == 2:
+                dists.append(math.dist((f[0]["x"], f[0]["y"]), (f[1]["x"], f[1]["y"])))
+        _FINISH_PAIRS = sorted(dists)
+    if not _FINISH_PAIRS:
+        return float("inf")
+    return _FINISH_PAIRS[min(len(_FINISH_PAIRS) - 1, int(pct * len(_FINISH_PAIRS)))]
+
+
+def role_hues(roles):
+    """{"hand": [hues], "foot": [...], "finish": [...]} from detect_leds.load_roles()."""
+    out = {}
+    for r in roles.values():
+        out.setdefault(role_class(r["name"]), []).append(r["hue"])
+    return out
+
+
+def colour_agreement(climb_holds, lit, hues):
+    """How well the LED colours fit a climb's roles: +1 for each lit hold (of the climb) whose colour clearly says the
+    role the climb gives it, -1 where it clearly says another, 0 where the colour is too unclear to say."""
+    score = 0
+    for h in lit:
+        cls = climb_holds.get((h["x"], h["y"]))
+        if cls is None or h.get("hue") is None:
+            continue
+        near = sorted((min(hue_distance(h["hue"], x) for x in xs), c) for c, xs in hues.items())
+        if len(near) > 1 and near[1][0] - near[0][0] < ROLE_MARGIN:
+            continue
+        score += 1 if near[0][1] == cls else -1
+    return score
+
+
+def break_ties(top, lit, hues):
+    """Among candidates with the same position overlap, put the one whose roles fit the LED colours best first.
+    This is the only place colours help pick a climb, and only after the positions alone couldn't decide.
+    Sets roles_agree on the tied candidates to their colour agreement, so assess() sees a resolved tie."""
+    if len(top) < 2:
+        return top
+    tied = [r for r in top if abs(r["jaccard"] - top[0]["jaccard"]) < 1e-9]
+    if len(tied) < 2:
+        return top
+    holds_of = {u: h for u, _, h in get_climbs()}
+    for r in tied:
+        holds = holds_of[r["uuid"]]
+        r["roles_agree"] = colour_agreement(mirror(holds) if r["mirrored"] else holds, lit, hues)
+    tied.sort(key=lambda r: -r["roles_agree"])
+    return tied + top[len(tied):]
 
 
 _CLIMBS = None

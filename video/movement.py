@@ -44,7 +44,7 @@ def assign_holds(track, holds, tolerance=HOLD_TOLERANCE):
     for f in track:
         assign = {}
         for limb in LIMBS:
-            pt = f["points"].get(limb)
+            pt = f["points"].get(limb.replace("wrist", "hand")) or f["points"].get(limb)   # hand centre if tracked
             assign[limb] = nearest_hold(pt, holds, tolerance) if pt else None
         assignments.append({"t": f["t"], "assign": assign})
     return assignments
@@ -57,7 +57,9 @@ def _stable_runs(assignments, limb, min_run=MIN_RUN):
     blips (tracking jitter, a hand passing over a hold) are dropped by
     merging them into whichever run they interrupt.
     """
-    raw = [(f["t"], f["assign"][limb]) for f in assignments]
+    # Off-the-hold readings are dropped: a limb stays on its last hold until it's on a different one
+    # (a hold the tracker briefly loses isn't a release).
+    raw = [(f["t"], f["assign"][limb]) for f in assignments if f["assign"][limb] is not None]
     runs = []   # each: [start_t, hole_id, length]
     for t, hole_id in raw:
         if runs and runs[-1][1] == hole_id:
@@ -72,7 +74,7 @@ def detect_moves(assignments, min_run=MIN_RUN):
     """All moves across every limb, in chronological order.
 
     A move is a limb's stable hold assignment changing to a different hold
-    (including to/from "off the wall", i.e. None). The first stable
+    (off-the-wall readings are ignored, see _stable_runs). The first stable
     assignment for a limb is its starting position, not a move.
     """
     moves = []
@@ -201,6 +203,67 @@ def build_flags(moves):
     return flags
 
 
+def _at(h):
+    return f"{h['x']:g},{h['y']:g}"
+
+
+def comment(moves, metrics, holds, outcome, end_s):
+    """Plain-language notes: what went well, what didn't, and (if the climb wasn't topped) the likely reason.
+    Rule-based on the moves, so "likely" is the honest word: a single side-on camera can't see why someone fell."""
+    by_id = {h["hole_id"]: h for h in holds}
+    hands = [m for m in moves if m["limb"] in HAND_LIMBS]
+    feet = [m for m in moves if m["limb"] in FOOT_LIMBS]
+    n = len(moves)
+    hesitations = [m for m in moves if m.get("hesitated")]
+    hips = [m for m in moves if m.get("hips_out")]
+    dynamic = [m for m in moves if m.get("style") == "dynamic"]
+    good, bad = [], []
+    if outcome == "topped":
+        good.append("Reached the finish hold.")
+    if n and len(feet) >= len(hands) * 0.6:
+        good.append(f"Good foot work: {len(feet)} foot moves against {len(hands)} hand moves, so the feet kept up with the hands.")
+    elif hands:
+        bad.append(f"Feet did little: {len(feet)} foot moves against {len(hands)} hand moves. Hands may have been doing the work of the feet.")
+    if n and len(hips) <= n * 0.25:
+        good.append("Hips stayed mostly in close to the holds.")
+    elif hips:
+        bad.append(f"Hips drifted out on {len(hips)} of {n} moves (worst {max(hips, key=lambda m: abs(m['hips_offset']))['hips_offset']:+.0f} in), which puts more load on the arms.")
+    if not hesitations and n:
+        good.append("Steady rhythm: no long stalls between moves.")
+    elif hesitations:
+        bad.append(f"{len(hesitations)} long stall{'s' if len(hesitations) > 1 else ''} between moves; the longest pause was {metrics['longest_pause_s']:g} s.")
+    if len(dynamic) >= 3:
+        bad.append(f"{len(dynamic)} dynamic moves; each one is a chance to miss the next hold.")
+    elif n and not dynamic:
+        good.append("Controlled, static movement throughout.")
+    failure = None
+    if outcome != "topped":
+        finish = [h for h in holds if h.get("role_name") == "finish"]
+        held = {}                                       # each hand's last hold
+        for m in hands:
+            held[m["limb"]] = by_id.get(m["to_hold"])
+        top_hold = max((h for h in held.values() if h), key=lambda h: h["y"], default=None)
+        parts = []
+        if top_hold and finish:
+            goal = max(finish, key=lambda h: h["y"])
+            parts.append(f"The highest hand hold reached was {_at(top_hold)}, {max(0, goal['y'] - top_hold['y']):g} in below the finish at {_at(goal)}.")
+        last = hands[-1] if hands else None
+        if last:
+            why = []
+            if last.get("style") == "dynamic":
+                why.append("the last hand move was dynamic, so it was likely a missed or fallen-off lunge")
+            if last.get("hips_out"):
+                why.append("hips were out on the last hand move, likely overloading the arms")
+            if last["duration_since_prev"] and last["duration_since_prev"] > 2:
+                why.append(f"there was a {last['duration_since_prev']:g} s stall before the last hand move, likely tiring or unsure of the sequence")
+            after = end_s - last["t"]
+            if after > 3:
+                why.append(f"nothing moved for the last {after:.0f} s, so the attempt looks to have ended there")
+            parts.append(("Likely reasons: " + "; ".join(why) + ".") if why else "No clear technique problem on the last move; it may have been a strength or hold-quality failure.")
+        failure = " ".join(parts) or "Not enough tracked hand moves to say."
+    return {"good": good, "bad": bad, "failure": failure}
+
+
 def analyse(track, holds, tolerance=HOLD_TOLERANCE, min_run=MIN_RUN):
     """Run the full movement analysis on one attempt. Returns a dict ready to save."""
     holds_by_id = {h["hole_id"]: h for h in holds}
@@ -209,13 +272,16 @@ def analyse(track, holds, tolerance=HOLD_TOLERANCE, min_run=MIN_RUN):
     classify_styles(moves, track)
     flag_hesitations(moves)
     flag_hips(moves, assignments, track, holds_by_id)
+    metrics = compute_metrics(moves, track)
+    attempt = {
+        "start_s": track[0]["t"] if track else 0.0,
+        "end_s": track[-1]["t"] if track else 0.0,
+        "outcome": attempt_outcome(moves, holds),
+    }
     return {
-        "attempt": {
-            "start_s": track[0]["t"] if track else 0.0,
-            "end_s": track[-1]["t"] if track else 0.0,
-            "outcome": attempt_outcome(moves, holds),
-        },
+        "attempt": attempt,
         "moves": moves,
-        "metrics": compute_metrics(moves, track),
+        "metrics": metrics,
         "flags": build_flags(moves),
+        "comments": comment(moves, metrics, holds, attempt["outcome"], attempt["end_s"]),
     }

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Movement analysis</title>
+<style>
+:root { --bg:#1b1f22; --panel:#242a2e; --raise:#2e353a; --line:#3a4247; --text:#e8ebeb; --muted:#9aa4a8; --ok:#7fd1a0; --warn:#e6c46b; --bad:#ff6b6b; }
+* { box-sizing: border-box; }
+html, body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+main { max-width:1500px; margin:0 auto; padding:12px; display:grid; gap:12px; }
+h1 { font-size:20px; margin:0; } h2 { font-size:16px; margin:0; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; display:grid; gap:8px; }
+label.btn { background:#2f5d46; border:1px solid #3f7a5c; border-radius:6px; padding:8px 14px; cursor:pointer; font-weight:600; justify-self:start; }
+.muted { color:var(--muted); font-size:13px; } .err { color:var(--bad); }
+video { width:100%; border-radius:8px; background:#000; }
+.bar { height:8px; background:var(--raise); border-radius:4px; overflow:hidden; } .bar > i { display:block; height:100%; background:var(--ok); }
+.stats { display:flex; flex-wrap:wrap; gap:6px 22px; } .stats b { font-size:18px; }
+table { width:100%; border-collapse:collapse; } th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+th { color:var(--muted); font-weight:500; font-size:13px; }
+.topped { color:var(--ok); } .nottopped { color:var(--bad); } .warn { color:var(--warn); }
+.split { display:grid; gap:12px; align-items:start; } .side { display:grid; gap:12px; }
+@media (min-width:900px) { .split { grid-template-columns:minmax(0,3fr) minmax(0,2fr); } .side { max-height:calc(100vh - 24px); overflow-y:auto; position:sticky; top:12px; } .split > .panel { position:sticky; top:12px; } }
+[hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Movement analysis</h1>
+  <section class="panel">
+    <label class="btn">Choose a climbing video<input id="file" type="file" accept="video/*" hidden></label>
+    <span class="muted">Fixed camera, LEDs lit for the climb. Needs a reference calibration from the <a href="../recogniser/" style="color:#8fb8ff">recogniser</a>'s Calibrate tab.</span>
+    <div id="prog" hidden><div id="step" class="muted"></div><div class="bar"><i id="fill" style="width:0"></i></div></div>
+    <div id="error" class="err"></div>
+  </section>
+  <div id="result" class="split" hidden>
+    <section class="panel"><video id="vid" controls playsinline></video></section>
+    <div class="side">
+    <section class="panel">
+      <h2 id="cname"></h2>
+      <div class="stats" id="stats"></div>
+      <div id="notes" style="display:grid;gap:6px"></div>
+      <h2>Flags</h2>
+      <ul id="flags" style="margin:0;padding-left:18px"></ul>
+    </section>
+    <section class="panel"><h2>Moves</h2>
+      <table><thead><tr><th>Time</th><th>Limb</th><th>From</th><th>To</th><th>Gap</th><th>Style</th></tr></thead><tbody id="moves"></tbody></table>
+    </section>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $("error").textContent = ""; $("result").hidden = true; $("prog").hidden = false;
+  $("step").textContent = "Uploading…"; $("fill").style.width = "0";
+  try {
+    const id = [...crypto.getRandomValues(new Uint8Array(6))].map(b => b.toString(16).padStart(2, "0")).join(""), SIZE = 50 << 20;
+    const n = Math.max(1, Math.ceil(f.size / SIZE));       // pieces, since the tunnel refuses requests over 100 MB
+    for (let i = 0; i < n; i++) {
+      $("step").textContent = `Uploading… ${Math.round(i / n * 100)}%`; $("fill").style.width = Math.round(i / n * 100) + "%";
+      const r = await fetch(`api/chunk?id=${id}&i=${i}&last=${i === n - 1 ? 1 : 0}`, { method: "POST", headers: { "Content-Type": f.type || "video/mp4" }, body: f.slice(i * SIZE, (i + 1) * SIZE) });
+      if (!r.ok) throw new Error((await r.json()).error);
+    }
+    poll(id);
+  } catch (err) { fail(err.message); }
+};
+const fail = m => { $("error").textContent = m; $("prog").hidden = true; };
+async function poll(id) {
+  const j = await (await fetch("api/job/" + id)).json();
+  $("step").textContent = j.step; $("fill").style.width = Math.round(j.progress * 100) + "%";
+  if (j.status === "error") return fail(j.error);
+  if (j.status === "done") { $("prog").hidden = true; return show(j.result); }
+  setTimeout(() => poll(id), 1500);
+}
+function show(r) {
+  $("result").hidden = false;
+  $("vid").src = r.video;
+  const c = r.climb;
+  $("cname").textContent = c ? `${c.name} ${c.grade}${c.mirrored ? " (mirrored)" : ""}` + (["confident","likely","tied"].includes(r.verdict) ? "" : ` — climb not certain (${r.verdict})`) : "Climb not recognised";
+  const m = r.metrics;
+  $("stats").innerHTML = [
+    `<span class="${r.outcome.replace(" ", "")}"><b>${r.outcome === "topped" ? "✔ Topped" : "✘ Not topped"}</b></span>`,
+    `<span><b>${m.move_count}</b> moves</span>`, `<span><b>${m.duration_s}s</b> total</span>`,
+    `<span><b>${m.moves_per_min}</b> moves/min</span>`, `<span><b>${m.rest_time_s}s</b> resting</span>`,
+    m.longest_pause_s ? `<span>Longest pause <b>${m.longest_pause_s}s</b>${r.pause_at ? ` at ${r.pause_at}` : ""}</span>` : "",
+  ].join("");
+  const cm = r.comments, list = (t, cls, a) => a.length ? `<div><b class="${cls}">${t}</b><ul style="margin:2px 0 0;padding-left:18px">${a.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "";
+  $("notes").innerHTML = list("Done well", "topped", cm.good) + list("Not so well", "warn", cm.bad) +
+    (cm.failure ? `<div><b class="nottopped">Why it wasn't topped</b><div>${esc(cm.failure)}</div></div>` : "");
+  $("flags").innerHTML = r.flags.map(f => `<li>${esc(f)}</li>`).join("") || `<li class="muted">Nothing notable flagged.</li>`;
+  $("moves").innerHTML = r.moves.map(x => `<tr><td>${x.t.toFixed(1)}s</td><td>${x.limb.replace("_", " ")}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td>` +
+    `<td>${x.duration_since_prev ?? "–"}</td><td>${x.style || ""}${x.hips_out ? " · hips out" : ""}</td></tr>`).join("");
+  $("result").scrollIntoView({ behavior: "smooth" });
+}
+</script>
+</body>
+</html>

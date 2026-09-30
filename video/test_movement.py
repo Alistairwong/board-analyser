@@ -61,6 +61,18 @@ class DetectMovesTests(unittest.TestCase):
         self.assertEqual(moves[0], {"limb": "left_wrist", "from_hold": 1, "to_hold": 2,
                                      "t": 0.3, "duration_since_prev": None})
 
+    def test_losing_the_hold_is_not_a_release(self):
+        seq = [(0.0, 1), (0.1, 1), (0.2, 1), (0.3, None), (0.4, None), (0.5, None), (0.6, None), (0.7, 1), (0.8, 1), (0.9, 1)]
+        self.assertEqual(mv.detect_moves(self._assignments(seq), min_run=3), [])
+
+    def test_comment_explains_a_miss(self):
+        holds = [{"hole_id": 1, "x": 0, "y": 100, "role_name": "middle"}, {"hole_id": 2, "x": 0, "y": 140, "role_name": "finish"}]
+        moves = [{"limb": "left_wrist", "from_hold": 1, "to_hold": 1, "t": 5.0, "duration_since_prev": None, "style": "dynamic", "hips_out": True, "hips_offset": -20}]
+        c = mv.comment(moves, {"longest_pause_s": 0}, holds, "unknown", 5.5)
+        self.assertIn("40 in below the finish", c["failure"])
+        self.assertIn("dynamic", c["failure"])
+        self.assertTrue(c["bad"])
+
     def test_short_blip_is_not_a_move(self):
         # Hand passes near hold 2 for one frame on the way to gripping hold 1 properly.
         seq = [(0.0, 1), (0.1, 2), (0.2, 1), (0.3, 1), (0.4, 1)]

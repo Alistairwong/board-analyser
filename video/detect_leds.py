@@ -21,11 +21,15 @@ import numpy as np
 
 from config import CLIMBS_PATH, DATA_DIR
 from calibrate import DB_PATH, CALIB_DIR, load_holes, grab_frame
+from match_climb import ROLE_MARGIN, finish_odds, finish_pair_limit, hue_distance, role_class
 
 DETECT_DIR = DATA_DIR / "detections"
 PATCH_INCHES = 1.5      # radius around each hole to look for an LED
 THRESHOLD_K = 4.5       # lit = this many spreads above a typical unlit hole
 MIN_THRESHOLD = 20      # never call anything below this lit
+MAX_FINISH = 2          # a climb has at most two finish holds (92% have one, 8% two)
+FINISH_LIKELY = 3.0     # finish : other-hold odds at a hold's height above which an unclear colour is called finish
+FINISH_UNLIKELY = 0.2   # ...and below which it is called the other kind (in between it stays undefined)
 
 # Hue ranges (OpenCV 0-179) that LEDs show up as on camera. Measured from
 # test1: finish ~23 (orange), start/hand ~84-101 (teal/blue), foot ~143
@@ -86,9 +90,65 @@ def circular_mean_hue(hues):
     return float((mean * 180 / (2 * np.pi)) % 180)
 
 
-def hue_distance(a, b):
-    d = abs(a - b) % 180
-    return min(d, 180 - d)
+def assign_role(hue, roles, y=None):
+    """(role id, clear). A hue nearly as close to a role of another kind (hand / foot / finish) as to the
+    best one is unclear: the role is left undefined (None) and worked out later from the matched climb.
+    Start and middle are one kind here, since they look almost identical on camera.
+
+    y (board height, inches), if given, settles an unclear finish-vs-hand or finish-vs-foot colour when
+    the database makes the answer lopsided at that height (see match_climb.finish_odds)."""
+    if not roles:
+        return None, False
+    ranked = sorted(roles, key=lambda rid: hue_distance(hue, roles[rid]["hue"]))
+    best = ranked[0]
+    rival = next((r for r in ranked[1:] if role_class(roles[r]["name"]) != role_class(roles[best]["name"])), None)
+    if rival is None:
+        return best, True
+    margin = hue_distance(hue, roles[rival]["hue"]) - hue_distance(hue, roles[best]["hue"])
+    if margin >= ROLE_MARGIN:
+        return best, True
+    names = {roles[best]["name"], roles[rival]["name"]}
+    if y is not None and "finish" in names:
+        finish, other = (best, rival) if roles[best]["name"] == "finish" else (rival, best)
+        odds = finish_odds(y, role_class(roles[other]["name"]))
+        if odds >= FINISH_LIKELY:
+            return finish, True
+        if odds <= FINISH_UNLIKELY:
+            return other, True
+    return None, False
+
+
+def cap_finish(lit, roles, limit=MAX_FINISH):
+    """Finish holds are at most `limit` (two) and, when there are two, not far apart (match_climb.finish_pair_limit).
+    If more were read as finish, keep the ones whose colour is closest to the finish colour (holds too low on the
+    board to be a finish go first); a second one farther than the limit from the first is dropped too. The rest become
+    undefined. Edits lit in place."""
+    finish = [h for h in lit if h["role_name"] == "finish"]
+    if not finish:
+        return lit
+    finish_hue = next(r["hue"] for r in roles.values() if r["name"] == "finish")
+    finish.sort(key=lambda h: (finish_odds(h["y"], "hand") < 0.05, hue_distance(h["hue"], finish_hue)))
+    keep = finish[:limit]
+    if len(keep) == 2 and ((keep[0]["x"] - keep[1]["x"]) ** 2 + (keep[0]["y"] - keep[1]["y"]) ** 2) ** 0.5 > finish_pair_limit():
+        keep = keep[:1]
+    for h in finish:
+        if h not in keep:
+            h.update(role=None, role_name=None, role_uncertain=True, role_guess="finish")
+    return lit
+
+
+def assign_lit_roles(lit, roles):
+    """Name each lit hold's role from its colour and height. Done after the climb search, never before it:
+    the search uses positions alone and only then are roles worked out (from the matched climb, or from these
+    colours when no climb was matched). Edits lit in place."""
+    for h in lit:
+        rid, clear = assign_role(h["hue"], roles, h["y"])
+        h["role"] = rid
+        h["role_name"] = roles[rid]["name"] if rid is not None else None
+        if not clear and roles:
+            h["role_uncertain"] = True
+            h["role_guess"] = roles[guess_role(h["hue"], roles)]["name"]
+    return cap_finish(lit, roles)
 
 
 def hex_to_bgr(hex_colour):
@@ -120,8 +180,12 @@ def guess_role(hue, roles):
 
 
 def detect(video, calib_name=None, fps=5, percentile=75, threshold=None,
-           verbose=True, images=True, progress=None):
-    """Find the lit holds in a video. Returns (and saves) the detection."""
+           verbose=True, images=True, progress=None, span=(0.0, 1.0), assign_roles=True):
+    """Find the lit holds in a video. Returns (and saves) the detection.
+
+    span: only use this fraction of the video, e.g. (0, 0.5) for the first half.
+    assign_roles: name each lit hold's role from its colour straight away (the default). Pass False to get
+    positions and hues only; then match the climb by position and call assign_lit_roles() after."""
     video = Path(video)
     say = print if verbose else (lambda *a, **k: None)
 
@@ -141,13 +205,15 @@ def detect(video, calib_name=None, fps=5, percentile=75, threshold=None,
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
     step = max(1, round(video_fps / fps))
+    first = int(span[0] * total_frames) if total_frames else 0
+    last = int(span[1] * total_frames) if total_frames else float("inf")
 
     all_scores, all_hues = [], []
     patches = centres = radii = None
     size_warning = None
     frame_idx = 0
-    while cap.grab():
-        if frame_idx % step == 0:
+    while frame_idx < last and cap.grab():
+        if frame_idx % step == 0 and frame_idx >= first:
             ok, frame = cap.retrieve()
             if not ok:
                 break
@@ -189,15 +255,15 @@ def detect(video, calib_name=None, fps=5, percentile=75, threshold=None,
     for i in np.where((hole_scores > threshold)
                       & np.array([is_led_hue(h) for h in hole_hues]))[0]:
         hue = float(hole_hues[i])
-        rid = guess_role(hue, roles)
         hid, name, x, y = holes[i]
         lit.append({
             "hole_id": hid, "name": name, "x": x, "y": y,
             "score": round(float(hole_scores[i]), 1),
             "hue": round(hue, 1),
-            "role": rid,
-            "role_name": roles[rid]["name"] if rid is not None else None,
+            "role": None, "role_name": None,
         })
+    if assign_roles:                   # callers that search by position first name the roles afterwards themselves
+        assign_lit_roles(lit, roles)
     lit.sort(key=lambda h: (-h["y"], h["x"]))
     lit_ids = {h["hole_id"] for h in lit}
 
