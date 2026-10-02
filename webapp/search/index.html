@@ -1153,8 +1153,8 @@ function renderInfo() {
     <div class="row2">
       <span>${c.generated ? "Generated climb, estimated grade" : `${fmt(c.asc)} ascents, ${c.stars != null ? "★ " + c.stars.toFixed(1) : "no rating"}`}${k >= 0 && !c.generated ? `<br>${fmt(k + 1)} of ${fmt(results.length)}` : ""}</span>
       <span class="nav">
-        ${bt.connected() ? `<button class="btn primary" id="barlight">Light up</button>
-        <button class="btn${st.fast ? " primary" : ""}" id="fastscroll" title="Flick through the climbs quickly to unstick the board">${st.fast ? "Stop" : "Fast scroll"}</button>` : ""}
+        ${bt.connected() ? `<button class="btn primary" id="barlight">Light up</button>` : ""}
+        <button class="btn${st.fast ? " primary" : ""}" id="fastscroll" title="Flick through the climbs quickly to unstick the board">${st.fast ? "Stop" : "Fast scroll"}</button>
         <button class="btn" id="prevclimb" aria-label="Previous climb" ${k <= 0 ? "disabled" : ""}>‹</button>
         <button class="btn" id="nextclimb" aria-label="Next climb" ${k >= results.length - 1 ? "disabled" : ""}>›</button>
       </span>
@@ -1163,9 +1163,7 @@ function renderInfo() {
   $("nextclimb").onclick = () => step(1);
   const light = $("barlight");
   if (light) light.onclick = () => bt.show(c, mirrored);
-  const fast = $("fastscroll");
-  if (fast) fast.onclick = toggleFastScroll;
-  else st.fast = false;   // board disconnected: stop
+  $("fastscroll").onclick = toggleFastScroll;
 }
 
 // Some boards hang on a climb until you flick through the list quickly, so this does it for you:
