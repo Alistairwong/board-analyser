@@ -276,6 +276,11 @@ ol.results li + li { border-top: 1px solid var(--line); }
         <p class="note">Each role also has its own shape on screen. These colours are also used when lighting a climb on your board.</p>
       </details>
     </section>
+    <section class="panel">
+      <h2>Stuck board?</h2>
+      <button class="btn" id="fastscroll">Fast scroll</button>
+      <p class="note">Flicks through the climbs quickly (lighting each one if a board is connected) until you press it again.</p>
+    </section>
   </aside>
 
   <main>
@@ -1154,7 +1159,7 @@ function renderInfo() {
       <span>${c.generated ? "Generated climb, estimated grade" : `${fmt(c.asc)} ascents, ${c.stars != null ? "★ " + c.stars.toFixed(1) : "no rating"}`}${k >= 0 && !c.generated ? `<br>${fmt(k + 1)} of ${fmt(results.length)}` : ""}</span>
       <span class="nav">
         ${bt.connected() ? `<button class="btn primary" id="barlight">Light up</button>` : ""}
-        <button class="btn${st.fast ? " primary" : ""}" id="fastscroll" title="Flick through the climbs quickly to unstick the board">${st.fast ? "Stop" : "Fast scroll"}</button>
+
         <button class="btn" id="prevclimb" aria-label="Previous climb" ${k <= 0 ? "disabled" : ""}>‹</button>
         <button class="btn" id="nextclimb" aria-label="Next climb" ${k >= results.length - 1 ? "disabled" : ""}>›</button>
       </span>
@@ -1163,7 +1168,6 @@ function renderInfo() {
   $("nextclimb").onclick = () => step(1);
   const light = $("barlight");
   if (light) light.onclick = () => bt.show(c, mirrored);
-  $("fastscroll").onclick = toggleFastScroll;
 }
 
 // Some boards hang on a climb until you flick through the list quickly, so this does it for you:
@@ -1171,7 +1175,9 @@ function renderInfo() {
 const FAST_MS = 150;
 function toggleFastScroll() {
   st.fast = !st.fast;
-  renderInfo();
+  const btn = $("fastscroll");
+  btn.textContent = st.fast ? "Stop" : "Fast scroll";
+  btn.classList.toggle("primary", st.fast);
   if (!st.fast) return;
   let dir = 1;
   const tick = () => {
@@ -1458,6 +1464,7 @@ const bt = {
   },
 };
 
+$("fastscroll").onclick = toggleFastScroll;
 init();
 
 if ("serviceWorker" in navigator) {
