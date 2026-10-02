@@ -106,8 +106,8 @@ outside Docker.
   kickboard (any 0-70° in 5° steps); the page has Board/Angle dropdowns (reload with `?board=&angle=`).
   `/climbs.json?board=&angle=` exports `data/search/climbs_<board>_<angle>.json` on first request (Kilter keeps only
   climbs with ascents at that angle, ~84k at 40°). `data/kilter.db` comes from `boardlib database kilter` (works without
-  a login; `KILTER_USERNAME`/`KILTER_PASSWORD` in `webapp/.env` add newer climbs). Kilter has no board photo (plain
-  hole grid) and is only partly left-right symmetric, so "mirrored" matches ~70% of holes. The video/ tools and
+  a login; `KILTER_USERNAME`/`KILTER_PASSWORD` in `webapp/.env` add newer climbs). Kilter's background is the hold-layout sheet
+  `webapp/search/kilter.webp` (homography in `kilter.json`, fitted to the hole positions, ~3 px median error); it is only partly left-right symmetric, so "mirrored" matches ~70% of holes. The video/ tools and
   recogniser/movement/analyser stay Tension-only.
 - `search.py`: small stdlib HTTP server. Serves `webapp/search/` files plus `/climbs.json`. Auto-runs the
   export when the database, climbs file or `export_search.py` changes. `--sync` / `--sync-only` update the

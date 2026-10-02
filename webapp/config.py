@@ -18,9 +18,9 @@ ANGLE = 40             # board angle, for grades and ascent stats
 # climbs down to a size a phone can hold).
 BOARDS = {
     "tension": dict(name="Tension Board 2", db="tension.db", product_id=PRODUCT_ID, layout_id=LAYOUT_ID,
-                    size_id=PRODUCT_SIZE_ID, angle=ANGLE, angles=[ANGLE], only_climbed=False, image=True),
+                    size_id=PRODUCT_SIZE_ID, angle=ANGLE, angles=[ANGLE], only_climbed=False, image="board.json"),
     "kilter": dict(name="Kilter Board Original 12x12", db="kilter.db", product_id=1, layout_id=1,
-                   size_id=10, angle=40, angles=list(range(0, 75, 5)), only_climbed=True, image=False),
+                   size_id=10, angle=40, angles=list(range(0, 75, 5)), only_climbed=True, image="kilter.json"),
 }
 
 # data/ is shared with the video/ project, normally one level up from this

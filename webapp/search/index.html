@@ -372,6 +372,7 @@ const st = {
   colours: PRESETS.app.slice(),
   preset: "app",
   autoLight: false,
+  fast: false,
 };
 
 const $ = id => document.getElementById(id);
@@ -401,7 +402,7 @@ async function init() {
     $("boardline").textContent = "Couldn't load the climb data. Start this page with: python search.py";
     return;
   }
-  if (data.image) { try { boardImg = await getJson("board.json"); } catch (e) { boardImg = null; } }
+  if (data.image) { try { boardImg = await getJson(data.image); } catch (e) { boardImg = null; } }
   board = data.key;
   store.set("board", board);
   store.set("angle:" + board, data.angle);
@@ -494,7 +495,7 @@ function buildBoard(img) {
   if (img) {
     // Photo-style layout image, with holes placed using its fitted transform
     P = holes.map(h => project(img.homography, h[0], h[1]));
-    const a = project(img.homography, 0, 72), b = project(img.homography, 1, 72);   // Tension only; 72 = mid-height
+    const a = project(img.homography, 0, 72), b = project(img.homography, 1, 72);   // 72 in = mid-height, to size one inch in pixels
     U = Math.hypot(b[0] - a[0], b[1] - a[1]);
     svg.setAttribute("viewBox", `0 0 ${img.width} ${img.height}`);
     el("image", { href: img.image, x: 0, y: 0, width: img.width, height: img.height }, base);
@@ -1152,7 +1153,8 @@ function renderInfo() {
     <div class="row2">
       <span>${c.generated ? "Generated climb, estimated grade" : `${fmt(c.asc)} ascents, ${c.stars != null ? "★ " + c.stars.toFixed(1) : "no rating"}`}${k >= 0 && !c.generated ? `<br>${fmt(k + 1)} of ${fmt(results.length)}` : ""}</span>
       <span class="nav">
-        ${bt.connected() ? `<button class="btn primary" id="barlight">Light up</button>` : ""}
+        ${bt.connected() ? `<button class="btn primary" id="barlight">Light up</button>
+        <button class="btn${st.fast ? " primary" : ""}" id="fastscroll" title="Flick through the climbs quickly to unstick the board">${st.fast ? "Stop" : "Fast scroll"}</button>` : ""}
         <button class="btn" id="prevclimb" aria-label="Previous climb" ${k <= 0 ? "disabled" : ""}>‹</button>
         <button class="btn" id="nextclimb" aria-label="Next climb" ${k >= results.length - 1 ? "disabled" : ""}>›</button>
       </span>
@@ -1161,6 +1163,28 @@ function renderInfo() {
   $("nextclimb").onclick = () => step(1);
   const light = $("barlight");
   if (light) light.onclick = () => bt.show(c, mirrored);
+  const fast = $("fastscroll");
+  if (fast) fast.onclick = toggleFastScroll;
+  else st.fast = false;   // board disconnected: stop
+}
+
+// Some boards hang on a climb until you flick through the list quickly, so this does it for you:
+// steps forward (and back at the end) every FAST_MS until the button is pressed again.
+const FAST_MS = 150;
+function toggleFastScroll() {
+  st.fast = !st.fast;
+  renderInfo();
+  if (!st.fast) return;
+  let dir = 1;
+  const tick = () => {
+    if (!st.fast) return;
+    const k = selectedIndex() + dir;
+    if (k < 0 || k >= results.length) dir = -dir;
+    step(dir);
+    if (!st.autoLight && st.selected && bt.connected()) bt.show(st.selected.c, st.selected.mirrored);   // light each one even without auto-light
+    setTimeout(tick, FAST_MS);
+  };
+  tick();
 }
 
 function showSelected() {
@@ -1406,6 +1430,18 @@ const bt = {
   },
 
   async show(c, mirrored) {
+    // one write at a time; if climbs change faster than the board takes them, only the latest is sent next
+    if (this.busy) { this.next = [c, mirrored]; return; }
+    this.busy = true;
+    try { await this.send(c, mirrored); }
+    finally {
+      this.busy = false;
+      const n = this.next; this.next = null;
+      if (n && this.connected()) this.show(...n);
+    }
+  },
+
+  async send(c, mirrored) {
     const note = $("lightnote");
     const leds = [];
     let missing = 0;

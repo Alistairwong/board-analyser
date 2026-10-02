@@ -1,0 +1,23 @@
+{
+ "image": "kilter.webp",
+ "width": 932,
+ "height": 1002,
+ "homography": [
+  [
+   5.988154635708314,
+   -0.10646288135548111,
+   18.004454710683078
+  ],
+  [
+   0.038184047888663405,
+   -5.981845526656389,
+   972.0372231402737
+  ],
+  [
+   4.029530763541469e-05,
+   -0.0002469731732686274,
+   1.0
+  ]
+ ],
+ "note": "Maps Kilter Original 12x12 board coordinates (inches) to pixels in kilter.webp (hold layout sheet). Fitted to the hole positions in kilter.db."
+}
