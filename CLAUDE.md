@@ -102,6 +102,13 @@ outside Docker.
 - `load_climbs.py`: climbs that fit the board -> `data/climbs_mirror_12x8.json` (`CLIMBS_PATH`). Lives
   here (not in `video/`) because `search.py` runs it directly as a subprocess whenever the database
   changes; `video/` only ever reads its output file.
+- **Boards (`webapp/config.py` `BOARDS`)**: the app serves Tension (40 only) and a Kilter Board Original 12x12 with
+  kickboard (any 0-70° in 5° steps); the page has Board/Angle dropdowns (reload with `?board=&angle=`).
+  `/climbs.json?board=&angle=` exports `data/search/climbs_<board>_<angle>.json` on first request (Kilter keeps only
+  climbs with ascents at that angle, ~84k at 40°). `data/kilter.db` comes from `boardlib database kilter` (works without
+  a login; `KILTER_USERNAME`/`KILTER_PASSWORD` in `webapp/.env` add newer climbs). Kilter has no board photo (plain
+  hole grid) and is only partly left-right symmetric, so "mirrored" matches ~70% of holes. The video/ tools and
+  recogniser/movement/analyser stay Tension-only.
 - `search.py`: small stdlib HTTP server. Serves `webapp/search/` files plus `/climbs.json`. Auto-runs the
   export when the database, climbs file or `export_search.py` changes. `--sync` / `--sync-only` update the
   database with BoardLib using `TENSION_USERNAME` / `TENSION_PASSWORD` from the environment (`webapp/.env`

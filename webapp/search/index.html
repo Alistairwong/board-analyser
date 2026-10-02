@@ -119,6 +119,8 @@ details.colours summary { cursor: pointer; font-weight: 600; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 header h1 { font: 700 30px/1.1 var(--cond); margin: 0; }
 header p { margin: 2px 0 16px; color: var(--muted); }
+.boardpick { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 0; }
+.boardpick select { margin-left: 4px; }
 .bt-status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
 .bt-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .bt-status.on .dot { background: var(--ok); }
@@ -265,7 +267,7 @@ ol.results li + li { border-top: 1px solid var(--line); }
         <div class="colour-row">
           <label for="preset">Colour set</label>
           <select id="preset">
-            <option value="app">Tension app colours</option>
+            <option value="app">Board app colours</option>
             <option value="cvd">Colour-blind friendly</option>
             <option value="custom">Custom</option>
           </select>
@@ -281,6 +283,8 @@ ol.results li + li { border-top: 1px solid var(--line); }
       <div>
         <h1>Climb search</h1>
         <p id="boardline">Loading climbs…</p>
+        <p class="boardpick"><label>Board <select id="boardsel" aria-label="Board"></select></label>
+          <label id="anglelab">Angle <select id="anglesel" aria-label="Board angle"></select></label></p>
         <p><a href="/recogniser/">Recognise a climb from a photo or video</a> · <a href="/movement/">Analyse movement in a video</a></p>
       </div>
       <div class="bt-status" id="btstatus"><span class="dot"></span><span id="bttext">Board not connected</span>
@@ -355,7 +359,7 @@ const PRESETS = {
   cvd: ["#ffffff", "#0050ff", "#ffd000", "#ff6a00"],
 };
 
-let holes = [], P = [], U = 1, mirrorOf = [], grades = [], climbs = [], results = [];
+let board = "tension", bounds = [-44, 44, 0, 144], holes = [], P = [], U = 1, mirrorOf = [], grades = [], climbs = [], results = [];
 const st = {
   q: "", gMin: null, gMax: null, minAsc: 0, minStars: 0, sort: "ascents",
   bench: false, mirror: true, ungraded: false,
@@ -373,6 +377,7 @@ const st = {
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 const fmt = n => n.toLocaleString();
+const myKey = () => board === "tension" ? "myclimbs" : "myclimbs_" + board;   // saved climbs are per board (hole numbers differ)
 const store = {
   get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
@@ -388,17 +393,25 @@ async function getJson(url) {
 
 async function init() {
   let data, boardImg = null;
-  try { data = await getJson("climbs.json"); }
+  const url = new URLSearchParams(location.search);
+  const want = url.get("board") || store.get("board") || "tension";
+  const wantAngle = url.get("angle") || store.get("angle:" + want) || "";
+  try { data = await getJson(`climbs.json?board=${encodeURIComponent(want)}&angle=${encodeURIComponent(wantAngle)}`); }
   catch (e) {
     $("boardline").textContent = "Couldn't load the climb data. Start this page with: python search.py";
     return;
   }
-  try { boardImg = await getJson("board.json"); } catch (e) { boardImg = null; }
+  if (data.image) { try { boardImg = await getJson("board.json"); } catch (e) { boardImg = null; } }
+  board = data.key;
+  store.set("board", board);
+  store.set("angle:" + board, data.angle);
+  bounds = data.bounds;
+  buildBoardPicker(data);
 
   holes = data.holes;
   window.boardSets = data.sets || [];
   const at = new Map(holes.map((h, i) => [h[0] + "," + h[1], i]));
-  mirrorOf = holes.map(h => at.get((-h[0]) + "," + h[1]) ?? -1);
+  mirrorOf = holes.map(h => at.get((bounds[0] + bounds[1] - h[0]) + "," + h[1]) ?? -1);   // mirror about the board's centre line
 
   grades = Object.entries(data.grades)
     .map(([d, n]) => { const [font, v] = n.split("/"); return { d: +d, font, v: v || font }; })
@@ -462,21 +475,36 @@ function project(H, x, y) {
   return [(H[0][0] * x + H[0][1] * y + H[0][2]) / w, (H[1][0] * x + H[1][1] * y + H[1][2]) / w];
 }
 
+// Board and angle dropdowns: choosing one reloads the page with that board's data
+function buildBoardPicker(data) {
+  const bs = $("boardsel"), as = $("anglesel");
+  bs.innerHTML = Object.entries(data.boards).map(([k, b]) => `<option value="${esc(k)}">${esc(b.name)}</option>`).join("");
+  bs.value = data.key;
+  const angles = data.boards[data.key].angles;
+  as.innerHTML = angles.map(a => `<option value="${a}">${a}°</option>`).join("");
+  as.value = data.angle;
+  $("anglelab").hidden = angles.length < 2;
+  const go = (b, a) => { location.search = `?board=${b}` + (a ? `&angle=${a}` : ""); };
+  bs.onchange = () => go(bs.value, "");
+  as.onchange = () => go(data.key, as.value);
+}
+
 function buildBoard(img) {
   const svg = $("board"), base = $("base"), hits = $("hits");
   if (img) {
     // Photo-style layout image, with holes placed using its fitted transform
     P = holes.map(h => project(img.homography, h[0], h[1]));
-    const a = project(img.homography, 0, 72), b = project(img.homography, 1, 72);
+    const a = project(img.homography, 0, 72), b = project(img.homography, 1, 72);   // Tension only; 72 = mid-height
     U = Math.hypot(b[0] - a[0], b[1] - a[1]);
     svg.setAttribute("viewBox", `0 0 ${img.width} ${img.height}`);
     el("image", { href: img.image, x: 0, y: 0, width: img.width, height: img.height }, base);
   } else {
     // Plain board: grey panel with bolt holes
-    P = holes.map(h => [h[0], 144 - h[1]]);
+    const [l, r, b, t] = bounds;
+    P = holes.map(h => [h[0], t - h[1]]);
     U = 1;
-    svg.setAttribute("viewBox", "-46 -2 92 148");
-    el("rect", { x: -44, y: 0, width: 88, height: 144, rx: 1.2, fill: "var(--board)" }, base);
+    svg.setAttribute("viewBox", `${l - 2} -2 ${r - l + 4} ${t - b + 4}`);
+    el("rect", { x: l, y: 0, width: r - l, height: t - b, rx: 1.2, fill: "var(--board)" }, base);
     P.forEach(([x, y]) => el("circle", { cx: x, cy: y, r: 0.85, fill: "var(--tnut)" }, base));
   }
   P.forEach(([x, y], i) => {
@@ -988,8 +1016,8 @@ const gen = {
 };
 
 const saved = {
-  list() { return store.get("myclimbs") || []; },
-  put(list) { store.set("myclimbs", list); renderSaved(); },
+  list() { return store.get(myKey()) || []; },
+  put(list) { store.set(myKey(), list); renderSaved(); },
   has(c) { return this.list().some(x => x.id === c.uuid); },
   save(c) {
     const name = (window.prompt("Name this climb", c.name) || "").trim();
@@ -1344,7 +1372,7 @@ const bt = {
     try {
       this.status("Choose your board…");
       this.device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [AURORA_SERVICE] }, { namePrefix: "Tension" }],
+        filters: [{ services: [AURORA_SERVICE] }, { namePrefix: "Tension" }, { namePrefix: "Kilter" }],
         optionalServices: [UART_SERVICE],
       });
       const m = /@(\d+)/.exec(this.device.name || "");

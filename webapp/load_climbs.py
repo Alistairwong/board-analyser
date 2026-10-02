@@ -16,7 +16,7 @@ DB_PATH = DATA_DIR / "tension.db"
 TOKEN = re.compile(r"p(\d+)r(\d+)")
 
 
-def load_climbs(con, layout_id=LAYOUT_ID, size_id=PRODUCT_SIZE_ID):
+def load_climbs(con, layout_id=LAYOUT_ID, size_id=PRODUCT_SIZE_ID, product_id=PRODUCT_ID):
     cur = con.cursor()
 
     left, right, bottom, top = cur.execute(
@@ -42,7 +42,7 @@ def load_climbs(con, layout_id=LAYOUT_ID, size_id=PRODUCT_SIZE_ID):
         for rid, name, colour in cur.execute(
             "SELECT id, name, screen_color FROM placement_roles "
             "WHERE product_id = ?",
-            (PRODUCT_ID,),
+            (product_id,),
         )
     }
 

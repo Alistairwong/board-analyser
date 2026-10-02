@@ -6,11 +6,11 @@ Usage (from anywhere):
     python webapp/search.py --host 0.0.0.0   # let other devices on your network use it
     python webapp/search.py --reexport       # rebuild the climb data first
 
-    python webapp/search.py --sync           # update the climb database from Tension first
-    python webapp/search.py --sync-only      # update the database and exit (for a scheduled job)
+    python webapp/search.py --sync           # update the climb databases (Tension, Kilter) first
+    python webapp/search.py --sync-only      # update the databases and exit (for a scheduled job)
 
-The climb data is rebuilt automatically when tension.db or the climbs file
-changes, even while the server is running. Press Ctrl+C to stop the server.
+The page switches between boards and angles (/climbs.json?board=kilter&angle=45). Each board's
+climb data is rebuilt automatically when its database changes, even while the server is running. Press Ctrl+C to stop the server.
 """
 import argparse
 import gzip
@@ -24,12 +24,12 @@ import threading
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
 
-from config import CLIMBS_PATH, DATA_DIR
-from export_search import DB_PATH, OUT, export
+from config import BOARDS, CLIMBS_PATH, DATA_DIR
+from export_search import db_path, export, out_path
 
 PAGE = HERE / "search" / "index.html"
 RECORD_PAGE = HERE / "search" / "record.html"
@@ -50,47 +50,51 @@ _cache = {}
 _export_lock = threading.Lock()
 
 
-def sync_database():
-    """Download or update tension.db with BoardLib, then rebuild the climb list.
+def sync_database(key="tension"):
+    """Download or update a board's database with BoardLib.
 
-    New climbs only come through when logged in, using TENSION_USERNAME and
-    TENSION_PASSWORD from the environment (the server's .env file).
+    New climbs only come through when logged in, using TENSION_USERNAME / TENSION_PASSWORD
+    (or KILTER_...) from the environment (the server's .env file). Without a login you still
+    get the climbs bundled with the app.
     """
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["boardlib", "database", "tension", str(DB_PATH)]
-    user = os.environ.get("TENSION_USERNAME", "").strip()
-    password = os.environ.get("TENSION_PASSWORD", "")
+    path = db_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["boardlib", "database", key, str(path)]
+    user = os.environ.get(f"{key.upper()}_USERNAME", "").strip()
+    password = os.environ.get(f"{key.upper()}_PASSWORD", "")
     if user:
         cmd += ["--username", user]
-        print(f"Syncing the Tension climb database as {user}...")
+        print(f"Syncing the {key} climb database as {user}...")
     else:
-        print("No TENSION_USERNAME set, so only the climbs bundled with the app are available.")
+        print(f"No {key.upper()}_USERNAME set, so only the climbs bundled with the app are available.")
     # BoardLib asks for the password at a prompt; answer it from the environment
     subprocess.run(cmd, check=True, text=True, input=(password + "\n") if user else None)
-    subprocess.run([sys.executable, str(LOAD_CLIMBS)], check=True)
-
-
-def ensure_data():
-    if not DB_PATH.exists():
-        sync_database()
-    elif not CLIMBS_PATH.exists():
+    if key == "tension":   # the video/ project reads this file; the app itself reads the database
         subprocess.run([sys.executable, str(LOAD_CLIMBS)], check=True)
 
 
-def export_if_needed():
+def ensure_data(key="tension"):
+    if not db_path(key).exists():
+        sync_database(key)
+    elif key == "tension" and not CLIMBS_PATH.exists():
+        subprocess.run([sys.executable, str(LOAD_CLIMBS)], check=True)
+
+
+def export_if_needed(key="tension", angle=None):
     with _export_lock:
-        ensure_data()             # rebuilds the climbs file if it has gone missing
-        if needs_export():
-            export()
+        ensure_data(key)          # downloads the database if it has gone missing
+        if needs_export(key, angle):
+            export(key, angle)
 
 
-def needs_export():
-    if not OUT.exists():
+def needs_export(key, angle):
+    out = out_path(key, angle or BOARDS[key]["angle"])
+    if not out.exists():
         return True
-    # rebuild when the data changes, or when the export itself has been updated
-    newest_source = max(DB_PATH.stat().st_mtime, CLIMBS_PATH.stat().st_mtime,
-                        (HERE / "export_search.py").stat().st_mtime)
-    return OUT.stat().st_mtime < newest_source
+    # rebuild when the data changes, or when the code or board settings have been updated
+    newest_source = max(db_path(key).stat().st_mtime,
+                        *((HERE / f).stat().st_mtime for f in ("export_search.py", "load_climbs.py", "config.py")))
+    return out.stat().st_mtime < newest_source
 
 
 def load(path):
@@ -107,7 +111,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         "/": (PAGE, "text/html; charset=utf-8"),
         "/index.html": (PAGE, "text/html; charset=utf-8"),
         "/record": (RECORD_PAGE, "text/html; charset=utf-8"),
-        "/climbs.json": (OUT, "application/json"),
     }
 
     def route(self, path):
@@ -163,10 +166,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith(tuple(PROXIES)):
             return self.proxy()
-        path = self.path.split("?")[0]
+        url = urlparse(self.path)
+        path = url.path
         if path == "/climbs.json":
-            export_if_needed()        # picks up a database sync without a restart
-        route = self.route(path)
+            q = parse_qs(url.query)
+            key = q.get("board", ["tension"])[0]
+            if key not in BOARDS:
+                return self.send_error(404)
+            try:
+                angle = int(q.get("angle", [BOARDS[key]["angle"]])[0])
+            except ValueError:
+                return self.send_error(400)
+            if angle not in BOARDS[key]["angles"]:
+                return self.send_error(404)
+            export_if_needed(key, angle)        # picks up a database sync without a restart
+            route = (out_path(key, angle), "application/json")
+        else:
+            route = self.route(path)
         if not route or not route[0].exists():
             self.send_error(404)
             return
@@ -238,7 +254,8 @@ def main():
     args = ap.parse_args()
 
     if args.sync or args.sync_only:
-        sync_database()
+        for key in BOARDS:
+            sync_database(key)
         if args.sync_only:
             export_if_needed()
             return
